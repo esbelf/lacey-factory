@@ -1,0 +1,37 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+
+/* LakeMat brand: navy #0A1E3C, orange #F06E37, ink #233250. */
+:root {
+  --canvas: #eef1f5;
+  --surface: #ffffff;
+  --ink: #233250;
+  --muted: #5b6a85;
+  --line: #d5dbe5;
+  --brand: #0a1e3c;
+  --brand-strong: #061226;
+  --accent: #f06e37;
+  --success: #17803d;
+  --warn: #e0a100;
+  --danger: #c0262d;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-accent: var(--accent);
+  --color-success: var(--success);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+}

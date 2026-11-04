@@ -1,0 +1,69 @@
+# Runs the whole app locally: Postgres, the Hono API and the Vite dev server.
+#   docker compose up --build      → http://localhost:5173
+# After changing dependencies:  docker compose up --build -V
+# Settings come from .env (copy .env.example).
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: factory
+      POSTGRES_PASSWORD: factory
+      POSTGRES_DB: factory
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U factory -d factory"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: { context: ., dockerfile: Dockerfile.dev }
+    working_dir: /app/api
+    # Applies any new migrations, then starts the API with reload on save.
+    command: sh -c "npm run db:migrate && npm run dev"
+    environment:
+      NODE_ENV: development
+      PORT: "8787"
+      DATABASE_URL: postgres://factory:factory@db:5432/factory
+      # Skip Auth0 and act as this user. Leave empty in .env to use real Auth0.
+      DEV_AUTH_EMAIL: ${DEV_AUTH_EMAIL-eric@lakemat.com}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+    ports:
+      - "8787:8787"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/api/node_modules
+      - /app/web/node_modules
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build: { context: ., dockerfile: Dockerfile.dev }
+    working_dir: /app/web
+    command: npm run dev
+    environment:
+      API_PROXY_TARGET: http://api:8787
+      VITE_DEV_AUTH: ${VITE_DEV_AUTH:-true}
+      VITE_AUTH0_DOMAIN: ${VITE_AUTH0_DOMAIN:-}
+      VITE_AUTH0_CLIENT_ID: ${VITE_AUTH0_CLIENT_ID:-}
+      VITE_AUTH0_AUDIENCE: ${VITE_AUTH0_AUDIENCE:-}
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/api/node_modules
+      - /app/web/node_modules
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
