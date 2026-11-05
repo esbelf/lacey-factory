@@ -1,7 +1,7 @@
 // All writes for the production flow. Every function takes the database and
 // the email of the person doing it, and runs in one transaction with row locks
 // so two people working at once can't double-cut a roll or double-sew a piece.
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, type SQL, sql } from "drizzle-orm";
 
 import {
   cutSessions,
@@ -35,6 +35,16 @@ function assertLines(lines: Line[]) {
 }
 
 const now = () => new Date();
+
+/** Undoing sewing or a receipt would pull sold pieces back; the sale has to be undone first. */
+async function refuseIfSold(tx: Tx, where: SQL) {
+  const [sold] = await tx
+    .select({ id: pieces.id })
+    .from(pieces)
+    .where(and(where, eq(pieces.status, "sold")))
+    .limit(1);
+  if (sold) throw new UserError("Some of these pieces were sold. Undo that sale first.");
+}
 
 // ───────────────────────── Settings ─────────────────────────
 
@@ -223,6 +233,7 @@ export async function voidCutSession(db: DB, actor: string, sessionId: string) {
       .from(pieces)
       .where(and(eq(pieces.cutSessionId, sessionId), isNull(pieces.voidedAt)))
       .for("update");
+    if (ps.some((p) => p.status === "sold")) throw new UserError("Some of these pieces were sold. Undo that sale first.");
     const moved = ps.some((p) => p.status !== "cut" && p.sewnBy !== "not_sewn");
     if (moved) {
       throw new UserError("Some of these pieces were already sewn or sent to Summit. Undo that first.");
@@ -323,6 +334,7 @@ export async function voidSewBatch(db: DB, actor: string, batchId: string) {
   await db.transaction(async (tx) => {
     const [batch] = await tx.select().from(sewBatches).where(eq(sewBatches.id, batchId)).for("update");
     if (!batch || batch.voidedAt) throw new UserError("That sewing entry was already undone.");
+    await refuseIfSold(tx, eq(pieces.sewBatchId, batchId));
     await tx.update(sewBatches).set({ voidedAt: now(), voidedBy: actor }).where(eq(sewBatches.id, batchId));
     await tx
       .update(pieces)
@@ -412,6 +424,7 @@ export async function voidSummitReceipt(db: DB, actor: string, receiptId: string
       .where(eq(summitReceipts.id, receiptId))
       .for("update");
     if (!receipt || receipt.voidedAt) throw new UserError("That receipt was already undone.");
+    await refuseIfSold(tx, eq(pieces.summitReceiptId, receiptId));
     await tx
       .update(summitReceipts)
       .set({ voidedAt: now(), voidedBy: actor })

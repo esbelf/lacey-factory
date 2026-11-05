@@ -60,6 +60,8 @@ const reads = {
   emailStatus: () => client.email.status.$get(),
   documents: () => client.documents.$get(),
   suppliers: () => client.suppliers.$get(),
+  steel: () => client.steel.$get(),
+  sales: () => client.sales.$get(),
 };
 
 export type Me = Data<typeof client.me.$get>;
@@ -67,6 +69,9 @@ export type UserRow = Data<typeof client.users.$get>[number];
 export type Roll = Data<(typeof client.rolls)[":id"]["$get"]>;
 export type SupplierDocument = Data<typeof client.documents.$get>[number];
 export type Supplier = Data<typeof client.suppliers.$get>[number];
+export type SteelData = Data<typeof client.steel.$get>;
+export type Product = Data<typeof client.products.$get>[number];
+export type SaleRow = Data<typeof client.sales.$get>[number];
 
 /** Short-lived link to view a stored supplier document. */
 export async function documentFileUrl(id: string): Promise<string> {

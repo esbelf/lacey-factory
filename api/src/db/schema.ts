@@ -18,8 +18,10 @@ import {
 const createdAt = () =>
   timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
 const feet = (name: string) => numeric(name, { precision: 8, scale: 2, mode: "number" });
+/** Dollars with 4 decimals; do math with @lacey-factory/shared/money. */
+const money = (name: string) => numeric(name, { precision: 14, scale: 4, mode: "number" });
 
-export const pieceStatus = pgEnum("piece_status", ["cut", "at_summit", "in_stock"]);
+export const pieceStatus = pgEnum("piece_status", ["cut", "at_summit", "in_stock", "sold"]);
 export const sewnBy = pgEnum("sewn_by", ["in_house", "summit", "not_sewn"]);
 export const adjustmentReason = pgEnum("adjustment_reason", [
   "opening_balance",
@@ -161,6 +163,8 @@ export const pieces = pgTable(
     sewBatchId: uuid("sew_batch_id").references(() => sewBatches.id),
     summitShipmentId: uuid("summit_shipment_id").references(() => summitShipments.id),
     summitReceiptId: uuid("summit_receipt_id").references(() => summitReceipts.id),
+    /** Set when the piece went out with a sale (status "sold"). */
+    saleId: uuid("sale_id").references(() => sales.id),
     voidedAt: timestamp("voided_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
@@ -180,6 +184,8 @@ export const inventoryAdjustments = pgTable("inventory_adjustments", {
   reason: adjustmentReason("reason").notNull(),
   adjustedOn: date("adjusted_on", { mode: "string" }).notNull(),
   note: text("note"),
+  /** Set on the "sale" rows a sale adds when it needs more than the in-stock pieces. */
+  saleId: uuid("sale_id").references(() => sales.id),
   createdBy: text("created_by").notNull(),
   createdAt: createdAt(),
 });
@@ -271,7 +277,7 @@ export const oauthStates = pgTable("oauth_states", {
 });
 
 /** What a supplier sends us. Each kind has its own handler in api/src/temporal/handlers. */
-export const supplierKind = pgEnum("supplier_kind", ["rolls"]);
+export const supplierKind = pgEnum("supplier_kind", ["rolls", "steel"]);
 
 export const suppliers = pgTable(
   "suppliers",
@@ -338,6 +344,9 @@ export const supplierDocuments = pgTable(
     invoiceNumber: text("invoice_number"),
     invoiceDate: date("invoice_date", { mode: "string" }),
     shipDate: date("ship_date", { mode: "string" }),
+    invoiceTotal: money("invoice_total"),
+    /** Freight lines on the invoice (steel: spread over the lines as landed cost). */
+    shippingCost: money("shipping_cost"),
     /** Claude's reading of the document (DocumentExtraction). */
     extracted: jsonb("extracted"),
     status: documentStatus("status").notNull().default("processing"),
@@ -351,4 +360,143 @@ export const supplierDocuments = pgTable(
     index("supplier_documents_status_idx").on(t.status),
     index("supplier_documents_invoice_idx").on(t.supplierId, t.invoiceNumber),
   ],
+);
+
+// ───────────── Steel ─────────────
+
+/** A kind of steel pole we stock, counted by the piece. */
+export const steelItems = pgTable(
+  "steel_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(), // e.g. 1-1/4" × 10' galvanized pole
+    sortOrder: integer("sort_order").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("steel_items_name_unique").on(t.name)],
+);
+
+/** How a steel supplier's invoice lines map to our steel items. */
+export const supplierSteelProducts = pgTable(
+  "supplier_steel_products",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    supplierId: uuid("supplier_id")
+      .notNull()
+      .references(() => suppliers.id),
+    productCode: text("product_code"),
+    descriptionMatch: text("description_match"),
+    steelItemId: uuid("steel_item_id")
+      .notNull()
+      .references(() => steelItems.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("supplier_steel_products_code_unique").on(t.supplierId, t.productCode)],
+);
+
+/** The steel half of a product's recipe: e.g. MuckMat XL uses 4 × 10' poles. */
+export const productSteel = pgTable(
+  "product_steel",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id),
+    steelItemId: uuid("steel_item_id")
+      .notNull()
+      .references(() => steelItems.id),
+    qty: integer("qty").notNull(),
+  },
+  (t) => [uniqueIndex("product_steel_unique").on(t.productId, t.steelItemId)],
+);
+
+export const steelLotSource = pgEnum("steel_lot_source", ["invoice", "opening_balance", "count_correction"]);
+
+/**
+ * A batch of poles at one cost (FIFO layer): one per invoice line, or a manual
+ * opening balance / count correction. Sales use the oldest lots first.
+ */
+export const steelLots = pgTable(
+  "steel_lots",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    steelItemId: uuid("steel_item_id")
+      .notNull()
+      .references(() => steelItems.id),
+    source: steelLotSource("source").notNull(),
+    sourceDocumentId: uuid("source_document_id").references(() => supplierDocuments.id),
+    invoiceNumber: text("invoice_number"),
+    receivedOn: date("received_on", { mode: "string" }).notNull(),
+    qty: integer("qty").notNull(),
+    qtyRemaining: integer("qty_remaining").notNull(),
+    /** Invoice rate per pole. */
+    unitCost: money("unit_cost").notNull(),
+    /** This line's share of the invoice freight, per pole. */
+    freightPerUnit: money("freight_per_unit").notNull().default(0),
+    /** unitCost + freightPerUnit: what a pole costs us, used for COGS. */
+    landedUnitCost: money("landed_unit_cost").notNull(),
+    note: text("note"),
+    createdBy: text("created_by").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("steel_lots_item_idx").on(t.steelItemId, t.receivedOn)],
+);
+
+export const saleSource = pgEnum("sale_source", ["manual", "shopify", "amazon", "api"]);
+
+/**
+ * A product sale. Recording one takes the product's steel (oldest lots first)
+ * and fabric pieces (oldest first) out of inventory. Undo is a soft void.
+ */
+export const sales = pgTable(
+  "sales",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id),
+    qty: integer("qty").notNull(),
+    soldOn: date("sold_on", { mode: "string" }).notNull(),
+    source: saleSource("source").notNull(),
+    /** Order id from the sales channel; the same order sent twice is recorded once. */
+    externalRef: text("external_ref"),
+    /** Steel cost of goods sold (FIFO landed cost). */
+    steelCost: money("steel_cost").notNull().default(0),
+    /** True while some of its steel wasn't in stock; cleared when a delivery fills it in. */
+    short: boolean("short").notNull().default(false),
+    note: text("note"),
+    createdBy: text("created_by").notNull(),
+    createdAt: createdAt(),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedBy: text("voided_by"),
+  },
+  (t) => [uniqueIndex("sales_source_ref_unique").on(t.source, t.externalRef), index("sales_sold_on_idx").on(t.soldOn)],
+);
+
+export const steelUsageReason = pgEnum("steel_usage_reason", ["sale", "count_correction"]);
+
+/**
+ * Poles taken out of stock, by lot. A row with no lot means we ran short; the
+ * next lot received for that item fills it in (and fixes the sale's cost).
+ */
+export const steelUsage = pgTable(
+  "steel_usage",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    steelItemId: uuid("steel_item_id")
+      .notNull()
+      .references(() => steelItems.id),
+    lotId: uuid("lot_id").references(() => steelLots.id),
+    qty: integer("qty").notNull(),
+    landedUnitCost: money("landed_unit_cost").notNull(),
+    reason: steelUsageReason("reason").notNull(),
+    saleId: uuid("sale_id").references(() => sales.id),
+    usedOn: date("used_on", { mode: "string" }).notNull(),
+    note: text("note"),
+    createdBy: text("created_by").notNull(),
+    createdAt: createdAt(),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+  },
+  (t) => [index("steel_usage_item_idx").on(t.steelItemId), index("steel_usage_sale_idx").on(t.saleId)],
 );

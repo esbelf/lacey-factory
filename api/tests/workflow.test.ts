@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { TestWorkflowEnvironment } from "@temporalio/testing";
 import { DefaultLogger, Runtime, Worker } from "@temporalio/worker";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -16,11 +17,13 @@ import * as schema from "../src/db/schema";
 import type { DB } from "../src/db/types";
 import { loadCatalog } from "../src/domain/catalog";
 import { saveSupplier } from "../src/domain/invoices";
+import { addSupplierSteelProduct, createSteelItem } from "../src/domain/steel";
 import { FakeMailSource, type FakeEmail } from "../src/email/mail-source";
 import { createActivities } from "../src/temporal/activities";
 import type { DocumentReader } from "../src/temporal/extract";
 import { mailboxWorkflowId, SIGNALS, WORKFLOWS } from "../src/temporal/names";
 import { hanesPackingList } from "./fixtures/hanes-extraction";
+import { steelInvoice } from "./fixtures/steel-extraction";
 
 const ACCOUNT = "eric@lakemat.com";
 let env: TestWorkflowEnvironment;
@@ -31,9 +34,9 @@ const stored = new Map<string, Buffer>();
 let reads = 0;
 
 const reader: DocumentReader = {
-  async read() {
+  async read(_doc, _mime, hint) {
     reads++;
-    return hanesPackingList;
+    return hint.supplierName === "Midwest Steel" ? steelInvoice : hanesPackingList;
   },
 };
 
@@ -163,5 +166,34 @@ describe("email workflows", () => {
     const docs = await db.select().from(schema.supplierDocuments);
     expect(docs.map((d) => d.status).sort()).toEqual(["duplicate", "registered"]);
     expect(await db.select().from(schema.rolls)).toHaveLength(4);
+  }, 120_000);
+
+  it("a steel supplier's invoice becomes cost lots through the same workflow", async () => {
+    const supplierId = await saveSupplier(db, { name: "Midwest Steel", emailPatterns: "@midweststeel.com", kind: "steel" });
+    for (const [code, name] of [["SP-114-10", "small pole"], ["SP-158-10", "large pole"]]) {
+      const item = await createSteelItem(db, { name });
+      await addSupplierSteelProduct(db, { supplierId, productCode: code, steelItemId: item.id });
+    }
+    await deliver({
+      id: "m4",
+      historyId: 4,
+      from: "Midwest Steel <billing@midweststeel.com>",
+      subject: "Invoice S-5001",
+      attachments: [{ filename: "S-5001.pdf", path: "hanes.pdf" }],
+    });
+
+    await withWorker(async () => {
+      const outcome = await env.client.workflow.execute(WORKFLOWS.processEmail, {
+        workflowId: "email-test-m4",
+        taskQueue: "test",
+        args: [{ account: ACCOUNT, messageId: "m4" }],
+      });
+      expect(outcome).toBe("done");
+    });
+
+    const [doc] = await db.select().from(schema.supplierDocuments).where(eq(schema.supplierDocuments.supplierId, supplierId));
+    expect(doc).toMatchObject({ status: "registered", invoiceNumber: "S-5001", shippingCost: 120 });
+    const lots = await db.select().from(schema.steelLots);
+    expect(lots.map((l) => l.qty).sort()).toEqual([20, 40]);
   }, 120_000);
 });

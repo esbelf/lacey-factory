@@ -3,8 +3,10 @@ import { formatFeet } from "@lacey-factory/shared/feet";
 import { patch, post, useApi } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { Loading } from "../components/loading";
+import { ProductsCard, SteelItemsCard } from "../components/steel-cards";
 import { SuppliersCard } from "../components/suppliers-card";
 import { Card, Empty, Field, Input, PageHeader, Select } from "../components/ui";
+import { useCan } from "../me";
 import { useTitle } from "../title";
 
 export function SettingsPage() {
@@ -12,9 +14,12 @@ export function SettingsPage() {
   const materialsQ = useApi("materials");
   const sizesQ = useApi("cutSizes");
   const productsQ = useApi("products");
-  if (!materialsQ.data || !sizesQ.data || !productsQ.data) {
-    return <Loading error={materialsQ.error ?? sizesQ.error ?? productsQ.error} />;
+  const steelQ = useApi("steel");
+  const can = useCan();
+  if (!materialsQ.data || !sizesQ.data || !productsQ.data || !steelQ.data) {
+    return <Loading error={materialsQ.error ?? sizesQ.error ?? productsQ.error ?? steelQ.error} />;
   }
+  const steelItems = steelQ.data.items;
   const materials = materialsQ.data;
   const sizes = sizesQ.data;
   const products = productsQ.data;
@@ -23,7 +28,7 @@ export function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        subtitle="Materials that come in on rolls, and the sizes we cut from each. Cut length is what comes off the roll per piece."
+        subtitle="Materials that come in on rolls and the sizes we cut from each, steel pole types, and what each product uses."
       />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_24rem]">
@@ -157,27 +162,11 @@ export function SettingsPage() {
           )}
         </Card>
 
-        <Card title="Products">
-          {products.length === 0 ? (
-            <Empty>No products yet. Load the LakeMat catalog to add them.</Empty>
-          ) : (
-            <ul className="divide-y divide-line">
-              {products.map(({ product, uses }) => (
-                <li key={product.id} className="flex flex-wrap justify-between gap-2 py-2">
-                  <span className="font-semibold">{product.name}</span>
-                  <span className="text-sm text-muted">
-                    {uses.map((u) => `${u.qty > 1 ? `${u.qty} × ` : ""}${u.material} ${u.label}`).join(" + ")}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="mt-3 text-sm text-muted">
-            Nothing is set aside for a product until it sells. LakeMat and MuckMat draw from the same sewn N06 pieces.
-          </p>
-        </Card>
+        <ProductsCard products={products} steelItems={steelItems} canEdit={can("settings")} />
 
-        <SuppliersCard materials={materials} />
+        <SteelItemsCard items={steelItems} />
+
+        <SuppliersCard materials={materials} steelItems={steelItems} />
 
         <Card title="LakeMat catalog">
           <p className="mb-3 text-base">

@@ -8,8 +8,10 @@ import {
   pieces,
   productComponents,
   products,
+  productSteel,
   rolls,
   sewBatches,
+  steelItems,
   summitReceipts,
   summitShipments,
 } from "../db/schema";
@@ -240,9 +242,24 @@ export async function listProducts(db: DB) {
     .leftJoin(materials, eq(cutSizes.materialId, materials.id))
     .orderBy(asc(products.sortOrder), asc(products.name), asc(materials.name));
 
-  const byId = new Map<string, { product: typeof products.$inferSelect; uses: { qty: number; label: string; material: string }[] }>();
+  const steel = await db
+    .select({ productId: productSteel.productId, steelItemId: productSteel.steelItemId, qty: productSteel.qty, name: steelItems.name })
+    .from(productSteel)
+    .innerJoin(steelItems, eq(productSteel.steelItemId, steelItems.id))
+    .orderBy(asc(steelItems.sortOrder), asc(steelItems.name));
+
+  type Entry = {
+    product: typeof products.$inferSelect;
+    uses: { qty: number; label: string; material: string }[];
+    steel: { steelItemId: string; qty: number; name: string }[];
+  };
+  const byId = new Map<string, Entry>();
   for (const r of rows) {
-    const entry = byId.get(r.product.id) ?? { product: r.product, uses: [] };
+    const entry = byId.get(r.product.id) ?? {
+      product: r.product,
+      uses: [],
+      steel: steel.filter((s) => s.productId === r.product.id).map((s) => ({ steelItemId: s.steelItemId, qty: s.qty, name: s.name })),
+    };
     if (r.sizeLabel && r.materialName && r.qty != null) {
       entry.uses.push({ qty: r.qty, label: r.sizeLabel, material: r.materialName });
     }

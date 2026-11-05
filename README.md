@@ -1,7 +1,9 @@
 # LakeMat Factory — factory.lakemat.com
 
 Internal app that tracks production: **roll received → cut → sewn (in-house or Summit) → inventory**.
-Replaces Katana MRP for inventory. Sales decrements (website / dealer / Amazon) come later.
+Replaces Katana MRP for inventory. Also tracks steel poles (bought by emailed invoice, costed FIFO with freight) and
+product sales, which take out each product's steel and fabric. Sales are entered by hand for now; Shopify, Amazon and
+other channels will call the same `recordSale` later.
 
 Stack: React + Vite (S3 + CloudFront) · Hono API (AWS Lambda) · Temporal worker (ECS Fargate + Temporal Cloud) · Postgres + Drizzle (Neon in production, Docker locally) · Auth0.
 

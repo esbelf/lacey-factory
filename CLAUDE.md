@@ -11,6 +11,7 @@ Stack: React + Vite SPA (S3 + CloudFront) → Hono API (AWS Lambda behind the sa
 ```bash
 docker compose up --build            # everything locally: db, temporal (UI :8233), localstack S3 :4566, api :8787, worker, web :5173 (needs LOCALSTACK_AUTH_TOKEN)
 docker compose exec api npm run simulate -- hanes   # fake supplier email (GMAIL_MODE=fake)
+npm run read-document -w api -- <file.pdf> "Supplier"   # what Claude reads from a document (one API call, needs ANTHROPIC_API_KEY)
 
 npm test                             # API tests (vitest, real Postgres via in-process PGlite)
 npm test -w api -- tests/flow.test.ts        # one file
@@ -46,6 +47,7 @@ npm workspaces:
 - Public routes (no app login) are listed in `PUBLIC_PATHS` in `app.ts`: health, the Google OAuth callback (authenticated by a one-time `oauth_states` row) and the Pub/Sub push webhook (Google OIDC token).
 - **Services** take `(db, actor email, input)` and run in one transaction with `.for("update")` row locks, so concurrent floor users can't double-cut or double-sew.
 - **Inventory is derived**, not stored: the count of non-voided `in_stock` pieces plus the sum of `inventory_adjustments`.
+- Money uses `numeric(14,4)` and `shared/src/money.ts` (`sumMoney`/`mulMoney`, ten-thousandths of a dollar), the same way feet use `feet.ts`.
 - Undo is a soft void (`voidedAt`/`voidedBy`), so queries must filter `voidedAt IS NULL`.
 - `pieces` has one row per physical piece. Status flows `cut` → `at_summit` → `in_stock`, and pieces are picked **FIFO** by `cutOn`.
 - Feet arithmetic must use `sumFeet`/`subtractFeet` from `shared/src/feet.ts`, which work in hundredths. Default dates use `todayInMichigan()`.
@@ -64,7 +66,13 @@ npm workspaces:
 - Gmail watch → Pub/Sub → `handleNotification` → `notifyMailbox` (signal-with-start). Workflows (ported from `../lacey-invoices-claude`): `mailboxWorkflow` holds the Gmail history cursor and starts one `processEmailWorkflow` per message (id `email-<account>-<messageId>`, REJECT_DUPLICATE); `renewWatchWorkflow` runs on the daily `renew-gmail-watch` schedule created by the worker.
 - `processEmailWorkflow`: match supplier by sender (`suppliers.email_patterns`) → `archiveDocument` (S3, content-addressed key, `supplier_documents` row unique on message+sha) → `extractDocument` (Claude reads PDF/image into `DocumentExtraction`, `src/temporal/extract.ts`) → `handleDocument` dispatches on `suppliers.kind` via `src/temporal/handlers/index.ts`. Add a supplier type there (plus the enum value) without touching the workflow.
 - The rolls handler: `planRolls` (pure) maps lines to `supplier_products` by code, then description; any unknown/ambiguous/size-mismatched line or unclear count → `needs_review`. `registerRolls` is one transaction, idempotent, marks a repeated invoice number `duplicate`, and links rolls via `rolls.source_document_id`. Humans register needs-review documents from the Inbox through the same function.
+- The steel handler (`src/domain/steel.ts`): `planSteel` (pure) maps product lines to `supplier_steel_products`, requires per-piece UOM, qty × rate ≈ amount (a cent per pole) and lines adding up to `invoice_total`; freight lines become `supplier_documents.shipping_cost`. `receiveSteel` writes one `steel_lots` row per line with freight spread by dollar value (`allocateFreight`) into `landed_unit_cost`. Shares the duplicate/idempotency logic with rolls via `lockDocument`/`markRegistered` in `invoices.ts`.
 - Workflow code (`src/temporal/workflows/`) runs in Temporal's sandbox: import only `names.ts`, types and `@temporalio/workflow` there. All I/O goes in `activities.ts`, built by `createActivities({ db, mail, reader, store })` so tests inject fakes.
+
+**Steel and sales** (`api/src/domain/steel.ts`, `api/src/domain/sales.ts`).
+- Steel on hand = sum of `steel_lots.qty_remaining` minus unfilled shortage rows. Lots are FIFO cost layers (invoice lines, opening balances, count corrections); `steel_usage` records every pole taken, by lot.
+- `recordSale` is the single entry point for every sales channel (only `manual` exists today; integrations pass `source` + `externalRef`, which is unique, so a re-sent order returns the first sale). It takes `product_steel` poles oldest lot first and `product_components` pieces oldest `cutOn` first (status `sold`, `pieces.sale_id`), falling back to a negative `sale` adjustment when pieces run out. It never refuses for lack of stock: missing steel becomes a usage row with no lot (sale `short`), filled in by `settleShortages` when the next lot arrives, which also corrects the sale's `steel_cost`.
+- `voidSale` returns poles to their lots, pieces to `in_stock`, and deletes its adjustments. Undoing a cut, sewing batch or Summit receipt is refused while any of its pieces are `sold`.
 
 **Local dev auth bypass.**
 - `DEV_AUTH_EMAIL` (API, only when `NODE_ENV=development`) together with `VITE_DEV_AUTH=true` (web) skips Auth0.

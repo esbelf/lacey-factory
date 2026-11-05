@@ -14,7 +14,8 @@
     "db:studio": "drizzle-kit studio",
     "worker": "tsx src/worker.ts",
     "worker:dev": "tsx watch --include src/temporal src/worker.ts",
-    "simulate": "tsx scripts/simulate.ts"
+    "simulate": "tsx scripts/simulate.ts",
+    "read-document": "tsx scripts/read-document.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.4.0",

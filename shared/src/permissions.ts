@@ -32,6 +32,8 @@ const PERMISSIONS = {
   "email:connect": ["admin"],
   /** Supplier inbox: see imported invoices, fix and register ones that need review. */
   "invoices:review": ["admin", "regular"],
+  /** Record or undo a product sale by hand (sales channels record them automatically later). */
+  "sales:record": ["admin", "regular"],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

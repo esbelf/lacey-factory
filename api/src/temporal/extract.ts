@@ -15,13 +15,19 @@ export const DocumentExtraction = z.object({
     .describe("The invoice number, or for a packing list its order/document number, exactly as printed; null if none"),
   invoice_date: z.string().nullable().describe("Document date as YYYY-MM-DD, or null"),
   ship_date: z.string().nullable().describe("Ship date as YYYY-MM-DD if printed separately, or null"),
+  invoice_total: z.number().nullable().describe("Invoice grand total in dollars as printed, or null"),
   lines: z
     .array(
       z.object({
+        line_kind: z
+          .enum(["product", "freight", "tax", "other"])
+          .describe("product = goods we bought; freight = freight/shipping/delivery charges; tax = sales tax; other = fees, discounts, deposits"),
         product_code: z.string().nullable().describe("Supplier product/item code (e.g. 38151), or null"),
         description: z.string().describe("Line description exactly as printed"),
         quantity: z.number().nullable().describe("Quantity on this line, or null"),
         uom: z.string().nullable().describe("Unit of measure as printed (ROLL, SY, EA, ...), or null"),
+        unit_price: z.number().nullable().describe("Price per unit (the rate) in dollars as printed, or null"),
+        amount: z.number().nullable().describe("Line total in dollars (the extended amount) as printed, or null"),
         width_ft: z.number().nullable().describe("Roll width in feet if the description gives it (12.5' → 12.5), or null"),
         length_ft: z.number().nullable().describe("Roll length in feet if the description gives it (360' → 360), or null"),
         roll_numbers: z
@@ -40,7 +46,9 @@ export interface DocumentReader {
 const PROMPT = `This document came by email from one of our suppliers. Read it and return its line items.
 Use exactly what is printed. If a value isn't on the document, return null rather than guessing.
 Dates on these US documents are month-first (09/16/2026 is 2026-09-16).
-Ignore summary rows such as subtotals, totals and price breakdowns like "(4 X 545.0000=$2,180.00)".`;
+Ignore summary rows such as subtotals, totals and price breakdowns like "(4 X 545.0000=$2,180.00)",
+but do return freight, shipping, delivery, tax and fee charges as their own lines with their amount.
+Return prices as plain numbers (1,234.50 → 1234.5).`;
 
 export class ClaudeDocumentReader implements DocumentReader {
   // Temporal owns retries, so the SDK makes one attempt.

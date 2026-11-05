@@ -1,3 +1,4 @@
+import { mulMoney } from "@lacey-factory/shared/money";
 import { can, permissionsFor, type Permission } from "@lacey-factory/shared/permissions";
 import { type Context, Hono } from "hono";
 import { createMiddleware } from "hono/factory";
@@ -11,7 +12,9 @@ import { loadCatalog } from "./domain/catalog";
 import { UserError } from "./domain/errors";
 import * as inv from "./domain/invoices";
 import * as q from "./domain/queries";
+import * as salesSvc from "./domain/sales";
 import * as svc from "./domain/services";
+import * as steel from "./domain/steel";
 import { type AppUser, ensureUser, listUsers, setUserRole } from "./domain/users";
 import * as mailbox from "./email/account";
 import type { GmailNotification } from "./temporal/names";
@@ -24,6 +27,8 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date.");
 const ft = z.coerce.number().positive("Must be greater than 0.");
 const optionalFt = z.preprocess((v) => (v === "" || v == null ? null : v), z.coerce.number().nonnegative().nullable());
 const qty = z.coerce.number().int("Whole numbers only.").min(1, "Quantity must be at least 1.");
+const dollars = z.coerce.number().nonnegative("Can't be negative.");
+const optionalDollars = z.preprocess((v) => (v === "" || v == null ? null : v), dollars.nullable());
 const id = z.string().uuid();
 const text = z.string().optional().nullable();
 const checkbox = z.preprocess((v) => v === true || v === "on" || v === "true", z.boolean());
@@ -72,6 +77,19 @@ const reviewLines = z.preprocess(
         lengthFt: z.coerce.number().positive("Length must be greater than 0."),
         count: z.coerce.number().int("Whole numbers only.").min(1, "Each line needs at least 1 roll."),
         rollNumbers: z.string().optional().default(""),
+      }),
+    )
+    .min(1, "Add at least one line."),
+);
+
+const steelReviewLines = z.preprocess(
+  (v) => (typeof v === "string" ? JSON.parse(v || "[]") : v),
+  z
+    .array(
+      z.object({
+        steelItemId: z.string().uuid("Pick a steel item for every line."),
+        qty: z.coerce.number().int("Whole numbers only.").min(1, "Each line needs at least 1 pole."),
+        unitCost: dollars,
       }),
     )
     .min(1, "Add at least one line."),
@@ -157,6 +175,11 @@ export function createApp(deps: AppDeps) {
     .get("/pipeline", async (c) => c.json(await q.pipelineBySize(c.var.db)))
     .get("/activity", async (c) => c.json(await q.recentActivity(c.var.db)))
     .get("/adjustments", async (c) => c.json(await q.recentAdjustments(c.var.db)))
+    .get("/steel", async (c) => {
+      const [items, activity] = await Promise.all([steel.steelSummary(c.var.db), steel.steelActivity(c.var.db)]);
+      return c.json({ items, ...activity });
+    })
+    .get("/sales", async (c) => c.json(await salesSvc.listSales(c.var.db)))
 
     // ── Settings ──
     .post("/materials", need("settings"), async (c) => {
@@ -199,6 +222,27 @@ export function createApp(deps: AppDeps) {
         active: i.active,
       });
       return ok(c, "Saved.");
+    })
+    .post("/steel-items", need("settings"), async (c) => {
+      const i = await input(c, z.object({ name: z.string().min(1, "Name is required."), sortOrder: z.coerce.number().int().default(0) }));
+      await steel.createSteelItem(c.var.db, i);
+      return ok(c, `Added ${i.name}.`);
+    })
+    .patch("/steel-items/:id", need("settings"), async (c) => {
+      const i = await input(
+        c,
+        z.object({ name: z.string().min(1, "Name is required."), sortOrder: z.coerce.number().int(), active: checkbox }),
+      );
+      await steel.updateSteelItem(c.var.db, param(c, "id"), i);
+      return ok(c, "Saved.");
+    })
+    .post("/products/:id/steel", need("settings"), async (c) => {
+      const i = await input(
+        c,
+        z.object({ steelItemId: z.string().uuid("Pick a steel item."), qty: z.coerce.number().int("Whole numbers only.").min(0) }),
+      );
+      await steel.setProductSteel(c.var.db, { ...i, productId: param(c, "id") });
+      return ok(c, i.qty === 0 ? "Removed." : "Saved.");
     })
     .post("/catalog/load", need("settings"), async (c) => {
       const r = await loadCatalog(c.var.db);
@@ -305,6 +349,32 @@ export function createApp(deps: AppDeps) {
       await svc.adjustInventory(c.var.db, c.var.user.email, i);
       return ok(c, "Inventory adjusted.");
     })
+    .post("/steel/adjustments", need("inventory:adjust"), async (c) => {
+      const i = await input(
+        c,
+        z.object({
+          steelItemId: z.string().uuid("Pick a steel item."),
+          qty: z.coerce.number().int("Whole numbers only."),
+          reason: z.enum(["opening_balance", "count_correction"]),
+          unitCost: optionalDollars,
+          adjustedOn: isoDate,
+          note: text,
+        }),
+      );
+      await steel.adjustSteel(c.var.db, c.var.user.email, i);
+      return ok(c, "Steel adjusted.");
+    })
+
+    // ── Sales ──
+    .post("/sales", need("sales:record"), async (c) => {
+      const i = await input(c, z.object({ productId: z.string().uuid("Pick a product."), qty, soldOn: isoDate, note: text }));
+      const { sale } = await salesSvc.recordSale(c.var.db, c.var.user.email, { ...i, source: "manual" });
+      return ok(c, sale.short ? "Sale recorded — some steel wasn't in stock." : "Sale recorded.", { id: sale.id });
+    })
+    .post("/sales/:id/void", need("sales:record"), async (c) => {
+      await salesSvc.voidSale(c.var.db, c.var.user.email, param(c, "id"));
+      return ok(c, "Sale undone.");
+    })
 
     // ── Supplier email (admin) ──
     .get("/email/status", need("email:connect"), async (c) => c.json(await mailbox.accountStatus(c.var.db)))
@@ -343,18 +413,36 @@ export function createApp(deps: AppDeps) {
       if (r.status === "duplicate") return ok(c, "This invoice was already registered from another email.");
       return ok(c, `Registered ${r.rollIds.length} roll${r.rollIds.length === 1 ? "" : "s"}.`);
     })
+    .post("/documents/:id/receive-steel", need("invoices:review"), async (c) => {
+      const i = await input(c, z.object({ receivedOn: isoDate, freight: dollars, lines: steelReviewLines }));
+      const r = await steel.receiveSteel(
+        c.var.db,
+        param(c, "id"),
+        {
+          freight: i.freight,
+          lines: i.lines.map((l) => ({ ...l, label: "", amount: mulMoney(l.qty, l.unitCost) })),
+        },
+        { actor: c.var.user.email, receivedOn: i.receivedOn, reviewedBy: c.var.user.email },
+      );
+      if (r.status === "duplicate") return ok(c, "This invoice was already registered from another email.");
+      const poles = i.lines.reduce((a, l) => a + l.qty, 0);
+      return ok(c, `Added ${poles} pole${poles === 1 ? "" : "s"} to steel inventory.`);
+    })
     .post("/documents/:id/dismiss", need("invoices:review"), async (c) => {
       const doc = await inv.getDocument(c.var.db, param(c, "id"));
       if (!doc) throw new HTTPException(404, { message: "Document not found." });
-      if (doc.status === "registered") throw new UserError("Rolls were already registered from this document.");
-      await inv.setDocumentStatus(c.var.db, doc.id, "not_invoice", "Marked as not a roll invoice.", c.var.user.email);
-      return ok(c, "Marked as not a roll invoice.");
+      if (doc.status === "registered") throw new UserError("This document was already registered.");
+      await inv.setDocumentStatus(c.var.db, doc.id, "not_invoice", "Marked as not an invoice we track.", c.var.user.email);
+      return ok(c, "Marked as not an invoice we track.");
     })
 
     // ── Suppliers (settings) ──
     .get("/suppliers", need("settings"), async (c) => c.json(await inv.listSuppliers(c.var.db)))
     .post("/suppliers", need("settings"), async (c) => {
-      const i = await input(c, z.object({ name: z.string().min(1, "Name is required."), emailPatterns: z.string() }));
+      const i = await input(
+        c,
+        z.object({ name: z.string().min(1, "Name is required."), emailPatterns: z.string(), kind: z.enum(["rolls", "steel"]).default("rolls") }),
+      );
       await inv.saveSupplier(c.var.db, i);
       return ok(c, `Saved ${i.name}.`);
     })
@@ -373,6 +461,15 @@ export function createApp(deps: AppDeps) {
     })
     .post("/supplier-products/:id/delete", need("settings"), async (c) => {
       await inv.removeSupplierProduct(c.var.db, param(c, "id"));
+      return ok(c, "Product removed.");
+    })
+    .post("/suppliers/:id/steel-products", need("settings"), async (c) => {
+      const i = await input(c, z.object({ productCode: text, descriptionMatch: text, steelItemId: z.string().uuid("Pick a steel item.") }));
+      await steel.addSupplierSteelProduct(c.var.db, { ...i, supplierId: param(c, "id") });
+      return ok(c, "Product added.");
+    })
+    .post("/supplier-steel-products/:id/delete", need("settings"), async (c) => {
+      await steel.removeSupplierSteelProduct(c.var.db, param(c, "id"));
       return ok(c, "Product removed.");
     })
 
