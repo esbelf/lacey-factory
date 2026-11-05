@@ -94,8 +94,8 @@ export function OrderPage() {
                     {i.problem && <div className="mt-1 text-sm text-danger">{i.problem}</div>}
                     {i.state === "recorded" && i.steelCost != null && (
                       <div className="mt-1 text-sm text-muted">
-                        Steel cost {formatMoney(i.steelCost)}
-                        {i.short && <span className="ml-1 font-semibold text-danger">(steel short)</span>}
+                        Steel {formatMoney(i.steelCost)} · box {formatMoney(i.boxCost)}
+                        {i.short && <span className="ml-1 font-semibold text-danger">(short)</span>}
                       </div>
                     )}
                   </td>

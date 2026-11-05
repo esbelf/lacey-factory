@@ -1,4 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -6,7 +7,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import * as schema from "../src/db/schema";
 import type { DB } from "../src/db/types";
 import { loadCatalog } from "../src/domain/catalog";
-import { listCutSizes, listProducts } from "../src/domain/queries";
+import { listCutSizes, listProducts, updateProductShipping } from "../src/domain/queries";
+import { setProductBox } from "../src/domain/steel";
 import * as svc from "../src/domain/services";
 
 let db: DB;
@@ -19,12 +21,32 @@ beforeAll(async () => {
 });
 
 describe("LakeMat catalog", () => {
-  it("adds the four materials, 13 sizes and 15 products", async () => {
-    expect(await loadCatalog(db)).toEqual({ materials: 4, sizes: 13, products: 15, components: 18, suppliers: 1 });
+  it("adds the four materials, 13 sizes, 44 products and 12 boxes", async () => {
+    expect(await loadCatalog(db)).toEqual({ materials: 4, sizes: 13, products: 44, components: 18, suppliers: 1, boxes: 12 });
   });
 
   it("adds nothing the second time", async () => {
-    expect(await loadCatalog(db)).toEqual({ materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0 });
+    expect(await loadCatalog(db)).toEqual({ materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0, boxes: 0 });
+  });
+
+  it("gives every product its SKU, box and packed weight, without overwriting edits", async () => {
+    const byName = Object.fromEntries((await listProducts(db)).map((p) => [p.product.name, p]));
+    expect(byName["LakeMat XL"]).toMatchObject({ product: { sku: "LM 24", shipWeightLb: 63 }, box: { name: "LAKEMAT BOX", qty: 1 }, steel: [] });
+    expect(byName["SandMat 12x70"]).toMatchObject({ product: { sku: "SM 12x70" }, box: { name: "BOATLIFT BOX" }, uses: [] });
+    expect(byName["Boatlift Mat OneSetOfLegs"].product.sku).toBe("BL HALF EXTREME");
+    expect(byName["Hydrilla Large 19'"].product.shipWeightLb).toBeNull();
+    expect(Object.values(byName).every((p) => p.box)).toBe(true);
+
+    // Changed in Settings, then the catalog is loaded again: the edit stays.
+    const [dock] = await db.select().from(schema.steelItems).where(eq(schema.steelItems.name, "DOCKMAT BOX"));
+    await setProductBox(db, { productId: byName["LakeMat XL"].product.id, boxId: dock.id });
+    await updateProductShipping(db, byName["LakeMat XL"].product.id, { sku: "LM-24X", shipWeightLb: 64 });
+    await loadCatalog(db);
+    const again = (await listProducts(db)).find((p) => p.product.name === "LakeMat XL")!;
+    expect(again).toMatchObject({ product: { sku: "LM-24X", shipWeightLb: 64 }, box: { name: "DOCKMAT BOX" } });
+    await expect(updateProductShipping(db, byName["LakeMat L"].product.id, { sku: "LM-24X", shipWeightLb: null })).rejects.toThrow(
+      /already used by LakeMat XL/,
+    );
   });
 
   it("loads sizes switched off, and doesn't overwrite a cut length set later", async () => {

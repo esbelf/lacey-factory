@@ -30,7 +30,7 @@ export function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        subtitle="Materials that come in on rolls and the sizes we cut from each, steel pole types, and what each product uses."
+        subtitle="Materials that come in on rolls and the sizes we cut from each, steel poles, shipping boxes, and what each product uses and ships in."
       />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_24rem]">
@@ -167,6 +167,8 @@ export function SettingsPage() {
         <ProductsCard products={products} steelItems={steelItems} canEdit={can("settings")} />
 
         <SteelItemsCard items={steelItems} />
+
+        <SteelItemsCard items={steelItems} kind="box" />
 
         <SuppliersCard materials={materials} steelItems={steelItems} />
 

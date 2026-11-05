@@ -201,11 +201,15 @@ export const products = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     name: text("name").notNull(),
     productLine: text("product_line").notNull(), // e.g. "MuckMat", "Boatlift Mat"
+    /** Our own SKU, e.g. "LM 24" (Amazon SKUs are linked in channel_skus). */
+    sku: text("sku"),
+    /** Packed weight with its box, in pounds. */
+    shipWeightLb: numeric("ship_weight_lb", { precision: 7, scale: 2, mode: "number" }),
     sortOrder: integer("sort_order").notNull().default(0),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex("products_name_unique").on(t.name)],
+  (t) => [uniqueIndex("products_name_unique").on(t.name), uniqueIndex("products_sku_unique").on(t.sku)],
 );
 
 export const productComponents = pgTable(
@@ -365,11 +369,22 @@ export const supplierDocuments = pgTable(
 // ───────────── Steel ─────────────
 
 /** A kind of steel pole we stock, counted by the piece. */
+export const stockItemKind = pgEnum("stock_item_kind", ["steel", "box"]);
+
+/**
+ * Parts we stock by the piece at FIFO cost: steel and shipping boxes (`kind`).
+ * Both use steel_lots / steel_usage / product_steel the same way.
+ */
 export const steelItems = pgTable(
   "steel_items",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    name: text("name").notNull(), // e.g. 1-1/4" × 10' galvanized pole
+    name: text("name").notNull(), // e.g. 1-1/4" × 10' galvanized pole, or LAKEMAT BOX
+    kind: stockItemKind("kind").notNull().default("steel"),
+    /** Box outside size in inches (boxes only). */
+    lengthIn: numeric("length_in", { precision: 6, scale: 2, mode: "number" }),
+    widthIn: numeric("width_in", { precision: 6, scale: 2, mode: "number" }),
+    heightIn: numeric("height_in", { precision: 6, scale: 2, mode: "number" }),
     sortOrder: integer("sort_order").notNull().default(0),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
@@ -463,6 +478,8 @@ export const sales = pgTable(
     externalRef: text("external_ref"),
     /** Steel cost of goods sold (FIFO landed cost). */
     steelCost: money("steel_cost").notNull().default(0),
+    /** Shipping box cost (FIFO landed cost). */
+    boxCost: money("box_cost").notNull().default(0),
     /** True while some of its steel wasn't in stock; cleared when a delivery fills it in. */
     short: boolean("short").notNull().default(false),
     note: text("note"),

@@ -31,6 +31,8 @@ const qty = z.coerce.number().int("Whole numbers only.").min(1, "Quantity must b
 const dollars = z.coerce.number().nonnegative("Can't be negative.");
 const optionalDollars = z.preprocess((v) => (v === "" || v == null ? null : v), dollars.nullable());
 const id = z.string().uuid();
+const optionalInches = z.preprocess((v) => (v === "" || v == null ? null : v), z.coerce.number().positive().nullable());
+const boxSize = { lengthIn: optionalInches, widthIn: optionalInches, heightIn: optionalInches };
 const text = z.string().optional().nullable();
 const checkbox = z.preprocess((v) => v === true || v === "on" || v === "true", z.boolean());
 const lines = z.preprocess(
@@ -231,16 +233,35 @@ export function createApp(deps: AppDeps) {
       return ok(c, "Saved.");
     })
     .post("/steel-items", need("settings"), async (c) => {
-      const i = await input(c, z.object({ name: z.string().min(1, "Name is required."), sortOrder: z.coerce.number().int().default(0) }));
+      const i = await input(
+        c,
+        z.object({
+          name: z.string().min(1, "Name is required."),
+          sortOrder: z.coerce.number().int().default(0),
+          kind: z.enum(["steel", "box"]).default("steel"),
+          ...boxSize,
+        }),
+      );
       await steel.createSteelItem(c.var.db, i);
       return ok(c, `Added ${i.name}.`);
     })
     .patch("/steel-items/:id", need("settings"), async (c) => {
       const i = await input(
         c,
-        z.object({ name: z.string().min(1, "Name is required."), sortOrder: z.coerce.number().int(), active: checkbox }),
+        z.object({ name: z.string().min(1, "Name is required."), sortOrder: z.coerce.number().int(), active: checkbox, ...boxSize }),
       );
       await steel.updateSteelItem(c.var.db, param(c, "id"), i);
+      return ok(c, "Saved.");
+    })
+    .post("/products/:id/box", need("settings"), async (c) => {
+      const i = await input(c, z.object({ boxId: z.preprocess((v) => (v === "" ? null : v), z.string().uuid().nullable()) }));
+      await steel.setProductBox(c.var.db, { productId: param(c, "id"), boxId: i.boxId });
+      await ord.retryProblems(c.var.db);
+      return ok(c, i.boxId ? "Box saved." : "Box removed.");
+    })
+    .patch("/products/:id", need("settings"), async (c) => {
+      const i = await input(c, z.object({ sku: text, shipWeightLb: optionalFt }));
+      await q.updateProductShipping(c.var.db, param(c, "id"), i);
       return ok(c, "Saved.");
     })
     .post("/products/:id/steel", need("settings"), async (c) => {
@@ -255,12 +276,12 @@ export function createApp(deps: AppDeps) {
     })
     .post("/catalog/load", need("settings"), async (c) => {
       const r = await loadCatalog(c.var.db);
-      if (r.materials + r.sizes + r.products + r.components + r.suppliers === 0) {
+      if (r.materials + r.sizes + r.products + r.components + r.suppliers + r.boxes === 0) {
         return ok(c, "Catalog already loaded — nothing to add.");
       }
       return ok(
         c,
-        `Added ${r.materials} materials, ${r.sizes} sizes (switched off until cut length is set), ${r.products} products` +
+        `Added ${r.materials} materials, ${r.sizes} sizes (switched off until cut length is set), ${r.products} products, ${r.boxes} boxes` +
           (r.suppliers ? `, ${r.suppliers} supplier (add its email addresses under Suppliers).` : "."),
       );
     })

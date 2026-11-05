@@ -37,7 +37,7 @@ export function OrdersPage() {
     <>
       <PageHeader
         title="Orders"
-        subtitle="Amazon US and Canada. A paid order takes its steel and fabric out of inventory; a cancel puts them back."
+        subtitle="Amazon US and Canada. A paid order takes its steel, fabric and box out of inventory; a cancel puts them back."
         action={
           status && status.mode !== "off" ? (
             <ActionForm action={post("/api/orders/sync")}>
@@ -226,7 +226,7 @@ function OrdersTable({ orders }: { orders: NonNullable<ReturnType<typeof useOrde
                     <ItemStateBadge state={i.state} />
                     {i.state === "recorded" && i.steelCost != null && (
                       <span className="text-sm text-muted">
-                        steel {formatMoney(i.steelCost)}
+                        steel {formatMoney(i.steelCost)} · box {formatMoney(i.boxCost)}
                         {i.short && <span className="ml-1 font-semibold text-danger">short</span>}
                       </span>
                     )}

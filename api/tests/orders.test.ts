@@ -282,6 +282,6 @@ describe("orders become sales", () => {
     expect((await syncState(db, "amazon"))!.cursor!.toISOString()).toBe("2026-10-23T12:00:00.000Z");
     expect(await run()).toBe(1); // overlap re-reads the newest; unchanged, so no item call
     expect(itemCalls).toBe(3);
-    expect((await listOrders(db, { q: "113-" })).orders).toHaveLength(3);
+    expect((await listOrders(db, { q: "113-000000" })).orders).toHaveLength(3);
   });
 });
