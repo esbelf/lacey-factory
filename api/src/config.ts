@@ -48,3 +48,22 @@ export function storageConfig() {
 export function claudeConfig() {
   return { model: env("CLAUDE_MODEL") ?? "claude-opus-5-5" };
 }
+
+export type AmazonMode = "off" | "fake" | "sandbox" | "live";
+
+export function amazonConfig() {
+  return {
+    /** off: no polling. fake: JSON orders in AMAZON_FAKE_DIR. sandbox/live: SP-API. */
+    mode: (env("AMAZON_MODE") ?? "off") as AmazonMode,
+    clientId: env("AMAZON_LWA_CLIENT_ID"),
+    clientSecret: env("AMAZON_LWA_CLIENT_SECRET"),
+    refreshToken: env("AMAZON_REFRESH_TOKEN"),
+    /** US and Canada by default. */
+    marketplaceIds: (env("AMAZON_MARKETPLACE_IDS") ?? "ATVPDKIKX0DER,A2EUQ1WTGCTBG2").split(",").map((s) => s.trim()).filter(Boolean),
+    /** First sync starts here (ISO date); default 30 days back. */
+    syncStart: env("AMAZON_SYNC_START"),
+    /** How often the schedule polls, e.g. 15m. */
+    syncEvery: env("AMAZON_SYNC_EVERY") ?? "15m",
+    fakeDir: env("AMAZON_FAKE_DIR") ?? "tmp/fake-amazon",
+  };
+}

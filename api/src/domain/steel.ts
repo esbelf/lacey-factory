@@ -1,5 +1,5 @@
-// Steel poles: invoice lines → FIFO cost lots, and taking poles out (sales,
-// count corrections). Matching is pure (planSteel, allocateFreight); writes run
+// Steel poles and shipping boxes (steel_items.kind): invoice lines → FIFO cost
+// lots, and taking pieces out (sales, count corrections). Matching is pure (planSteel, allocateFreight); writes run
 // in one transaction with the steel item row locked.
 import { fromUnits, mulMoney, sumMoney, toUnits } from "@lacey-factory/shared/money";
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
@@ -157,15 +157,15 @@ async function openLots(tx: Tx, steelItemId: string) {
 /** Recomputes a sale's steel cost and short flag from its usage rows. */
 async function refreshSaleCost(tx: Tx, saleId: string) {
   const rows = await tx
-    .select()
+    .select({ usage: steelUsage, kind: steelItems.kind })
     .from(steelUsage)
+    .innerJoin(steelItems, eq(steelUsage.steelItemId, steelItems.id))
     .where(and(eq(steelUsage.saleId, saleId), isNull(steelUsage.voidedAt)));
+  const cost = (kind: StockKind) =>
+    sumMoney(rows.filter((r) => r.kind === kind).map((r) => mulMoney(r.usage.qty, r.usage.landedUnitCost)));
   await tx
     .update(sales)
-    .set({
-      steelCost: sumMoney(rows.map((r) => mulMoney(r.qty, r.landedUnitCost))),
-      short: rows.some((r) => r.lotId === null),
-    })
+    .set({ steelCost: cost("steel"), boxCost: cost("box"), short: rows.some((r) => r.usage.lotId === null) })
     .where(eq(sales.id, saleId));
 }
 
@@ -392,26 +392,70 @@ export async function adjustSteel(
 
 // ── Settings ──
 
-export async function createSteelItem(db: DB, input: { name: string; sortOrder?: number }) {
-  const name = input.name.trim();
+export type StockKind = (typeof steelItems.$inferSelect)["kind"];
+type Dimensions = { lengthIn?: number | null; widthIn?: number | null; heightIn?: number | null };
+
+const itemWord = (kind: StockKind) => (kind === "box" ? "box" : "steel item");
+
+async function checkName(db: DB, name: string, kind: StockKind, id?: string) {
   if (!name) throw new UserError("Name is required.");
-  const [dupe] = await db.select().from(steelItems).where(eq(steelItems.name, name));
-  if (dupe) throw new UserError(`A steel item named "${name}" already exists.`);
-  const [row] = await db.insert(steelItems).values({ name, sortOrder: input.sortOrder ?? 0 }).returning();
+  const clash = await db.select({ id: steelItems.id }).from(steelItems).where(eq(steelItems.name, name));
+  if (clash.some((s) => s.id !== id)) throw new UserError(`A ${itemWord(kind)} named "${name}" already exists.`);
+}
+
+/** Box sizes only apply to boxes. */
+const dims = (kind: StockKind, d: Dimensions) =>
+  kind === "box"
+    ? { lengthIn: d.lengthIn ?? null, widthIn: d.widthIn ?? null, heightIn: d.heightIn ?? null }
+    : { lengthIn: null, widthIn: null, heightIn: null };
+
+export async function createSteelItem(db: DB, input: { name: string; sortOrder?: number; kind?: StockKind } & Dimensions) {
+  const name = input.name.trim();
+  const kind = input.kind ?? "steel";
+  await checkName(db, name, kind);
+  const [row] = await db
+    .insert(steelItems)
+    .values({ name, kind, sortOrder: input.sortOrder ?? 0, ...dims(kind, input) })
+    .returning();
   return row;
 }
 
-export async function updateSteelItem(db: DB, id: string, input: { name: string; sortOrder: number; active: boolean }) {
+export async function updateSteelItem(
+  db: DB,
+  id: string,
+  input: { name: string; sortOrder: number; active: boolean } & Dimensions,
+) {
+  const [item] = await db.select({ kind: steelItems.kind }).from(steelItems).where(eq(steelItems.id, id));
+  if (!item) throw new UserError("Not found.");
   const name = input.name.trim();
-  if (!name) throw new UserError("Name is required.");
-  const clash = await db.select().from(steelItems).where(eq(steelItems.name, name));
-  if (clash.some((s) => s.id !== id)) throw new UserError(`A steel item named "${name}" already exists.`);
-  await db.update(steelItems).set({ ...input, name }).where(eq(steelItems.id, id));
+  await checkName(db, name, item.kind, id);
+  await db
+    .update(steelItems)
+    .set({ name, sortOrder: input.sortOrder, active: input.active, ...dims(item.kind, input) })
+    .where(eq(steelItems.id, id));
+}
+
+/** A product ships in one box: replaces its box (null removes it). */
+export async function setProductBox(db: DB, input: { productId: string; boxId: string | null }) {
+  await db.transaction(async (tx) => {
+    if (input.boxId) {
+      const [box] = await tx.select({ kind: steelItems.kind }).from(steelItems).where(eq(steelItems.id, input.boxId));
+      if (box?.kind !== "box") throw new UserError("Pick a box.");
+    }
+    const boxIds = tx.select({ id: steelItems.id }).from(steelItems).where(eq(steelItems.kind, "box"));
+    await tx
+      .delete(productSteel)
+      .where(and(eq(productSteel.productId, input.productId), inArray(productSteel.steelItemId, boxIds)));
+    if (input.boxId) await tx.insert(productSteel).values({ productId: input.productId, steelItemId: input.boxId, qty: 1 });
+  });
 }
 
 /** Sets how many of a steel item a product uses; 0 removes it from the recipe. */
 export async function setProductSteel(db: DB, input: { productId: string; steelItemId: string; qty: number }) {
   if (!Number.isInteger(input.qty) || input.qty < 0) throw new UserError("Quantity must be a whole number, 0 or more.");
+  const [item] = await db.select({ kind: steelItems.kind }).from(steelItems).where(eq(steelItems.id, input.steelItemId));
+  if (!item) throw new UserError("Steel item not found.");
+  if (item.kind === "box") throw new UserError("Set a product's box with the box picker.");
   const where = and(eq(productSteel.productId, input.productId), eq(productSteel.steelItemId, input.steelItemId));
   if (input.qty === 0) {
     await db.delete(productSteel).where(where);

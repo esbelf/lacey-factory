@@ -1,7 +1,7 @@
-import { Client, Connection } from "@temporalio/client";
+import { Client, Connection, WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
 
 import { temporalConfig } from "../config";
-import { type GmailNotification, mailboxWorkflowId, SIGNALS, WORKFLOWS } from "./names";
+import { AMAZON_SYNC_NOW_ID, type GmailNotification, mailboxWorkflowId, SIGNALS, WORKFLOWS } from "./names";
 
 /** Local dev server needs no auth; Temporal Cloud uses TLS + TEMPORAL_API_KEY. */
 export function connectionOptions() {
@@ -33,4 +33,20 @@ export async function notifyMailbox(n: GmailNotification) {
     signal: SIGNALS.gmailNotification,
     signalArgs: [{ emailAddress: email, historyId: String(n.historyId) }],
   });
+}
+
+/** "Sync now": starts an Amazon sync unless one from this button is already running. */
+export async function startAmazonSync(): Promise<"started" | "running"> {
+  const client = await temporalClient();
+  try {
+    await client.workflow.start(WORKFLOWS.amazonSync, {
+      workflowId: AMAZON_SYNC_NOW_ID,
+      taskQueue: temporalConfig().taskQueue,
+      workflowIdConflictPolicy: "FAIL",
+    });
+    return "started";
+  } catch (err) {
+    if (err instanceof WorkflowExecutionAlreadyStartedError) return "running";
+    throw err;
+  }
 }

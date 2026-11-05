@@ -1,10 +1,24 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
-import { CATALOG_MATERIALS, CATALOG_PRODUCTS, CATALOG_SUPPLIERS } from "../db/catalog";
-import { cutSizes, materials, productComponents, products, supplierProducts, suppliers } from "../db/schema";
+import {
+  CATALOG_BOXES,
+  CATALOG_MATERIALS,
+  CATALOG_PRODUCTS,
+  CATALOG_PRODUCTS_WITHOUT_RECIPE,
+  CATALOG_SHIPPING,
+  CATALOG_SUPPLIERS,
+} from "../db/catalog";
+import { cutSizes, materials, productComponents, products, productSteel, steelItems, supplierProducts, suppliers } from "../db/schema";
 import type { DB } from "../db/types";
 
-export type CatalogResult = { materials: number; sizes: number; products: number; components: number; suppliers: number };
+export type CatalogResult = {
+  materials: number;
+  sizes: number;
+  products: number;
+  components: number;
+  suppliers: number;
+  boxes: number;
+};
 
 /**
  * Adds Lacey's catalog (materials, cut sizes, products) where missing.
@@ -14,7 +28,7 @@ export type CatalogResult = { materials: number; sizes: number; products: number
  */
 export async function loadCatalog(db: DB): Promise<CatalogResult> {
   return db.transaction(async (tx) => {
-    const added: CatalogResult = { materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0 };
+    const added: CatalogResult = { materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0, boxes: 0 };
     const sizeId = new Map<string, string>(); // "material|label" → id
 
     for (const m of CATALOG_MATERIALS) {
@@ -85,6 +99,48 @@ export async function loadCatalog(db: DB): Promise<CatalogResult> {
           .values({ supplierId: row.id, productCode: p.productCode, descriptionMatch: p.descriptionMatch, materialId: mat.id, widthFt: p.widthFt, lengthFt: p.lengthFt })
           .onConflictDoNothing();
       }
+    }
+    // Products whose recipe isn't known yet (no fabric pieces).
+    for (const [i, p] of CATALOG_PRODUCTS_WITHOUT_RECIPE.entries()) {
+      const inserted = await tx
+        .insert(products)
+        .values({ name: p.name, productLine: p.productLine, sortOrder: CATALOG_PRODUCTS.length + i + 1 })
+        .onConflictDoNothing()
+        .returning({ id: products.id });
+      added.products += inserted.length;
+    }
+
+    // Shipping boxes.
+    const boxId = new Map<string, string>();
+    for (const [i, b] of CATALOG_BOXES.entries()) {
+      let [row] = await tx.select({ id: steelItems.id }).from(steelItems).where(eq(steelItems.name, b.name));
+      if (!row) {
+        [row] = await tx.insert(steelItems).values({ ...b, kind: "box", sortOrder: i + 1 }).returning({ id: steelItems.id });
+        added.boxes++;
+      }
+      boxId.set(b.name, row.id);
+    }
+
+    // SKU, weight and box: filled in only where still empty, so Settings edits stay.
+    const allBoxIds = tx.select({ id: steelItems.id }).from(steelItems).where(eq(steelItems.kind, "box"));
+    for (const s of CATALOG_SHIPPING) {
+      const [prod] = await tx.select().from(products).where(eq(products.name, s.product));
+      if (!prod) throw new Error(`Catalog error: shipping row for unknown product ${s.product}`);
+      const patch: Partial<typeof products.$inferInsert> = {};
+      if (prod.sku == null) {
+        const [taken] = await tx.select({ id: products.id }).from(products).where(eq(products.sku, s.sku));
+        if (!taken) patch.sku = s.sku;
+      }
+      if (prod.shipWeightLb == null && s.weightLb != null) patch.shipWeightLb = s.weightLb;
+      if (Object.keys(patch).length) await tx.update(products).set(patch).where(eq(products.id, prod.id));
+
+      const [hasBox] = await tx
+        .select({ id: productSteel.id })
+        .from(productSteel)
+        .where(and(eq(productSteel.productId, prod.id), inArray(productSteel.steelItemId, allBoxIds)));
+      const box = boxId.get(s.box);
+      if (!box) throw new Error(`Catalog error: ${s.product} uses unknown box ${s.box}`);
+      if (!hasBox) await tx.insert(productSteel).values({ productId: prod.id, steelItemId: box, qty: 1 });
     }
     return added;
   });

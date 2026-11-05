@@ -1,10 +1,12 @@
 import { todayInMichigan } from "@lacey-factory/shared/feet";
 import { formatMoney, sumMoney } from "@lacey-factory/shared/money";
 import clsx from "clsx";
+import { Link } from "react-router";
 
 import { post, type Product, type SaleRow, type SteelData, useApi } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { Loading } from "../components/loading";
+import { boxSize } from "../components/steel-cards";
 import { Card, Empty, Field, formatDate, Input, PageHeader, Select, Table } from "../components/ui";
 import { useCan } from "../me";
 import { useTitle } from "../title";
@@ -45,7 +47,7 @@ export function InventoryPage() {
     <>
       <PageHeader
         title="Inventory"
-        subtitle="Sewn fabric by size and steel poles on hand. Each sale takes out the fabric and steel its product uses."
+        subtitle="Sewn fabric, steel and shipping boxes on hand. Each sale takes out the fabric, steel and box its product uses."
       />
 
       <Card title="Fabric">
@@ -85,7 +87,8 @@ export function InventoryPage() {
         )}
       </Card>
 
-      <SteelTable items={steelQ.data.items} />
+      <StockTable items={steelQ.data.items} kind="steel" />
+      <StockTable items={steelQ.data.items} kind="box" />
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         {can("sales:record") && <RecordSale products={productsQ.data} />}
@@ -165,18 +168,22 @@ export function InventoryPage() {
   );
 }
 
-function SteelTable({ items }: { items: SteelData["items"] }) {
-  const shown = items.filter((i) => i.active || i.onHand !== 0);
+type StockItem = SteelData["items"][number];
+
+function StockTable({ items, kind }: { items: StockItem[]; kind: "steel" | "box" }) {
+  const shown = items.filter((i) => i.kind === kind && (i.active || i.onHand !== 0));
+  const box = kind === "box";
   return (
-    <Card title="Steel poles" className="mt-6">
+    <Card title={box ? "Shipping boxes" : "Steel poles"} className="mt-6">
       {shown.length === 0 ? (
-        <Empty>No steel items yet. Add them under Settings → Steel poles.</Empty>
+        <Empty>{box ? "No boxes yet. Load the catalog or add them under Settings → Boxes." : "No steel items yet. Add them under Settings → Steel poles."}</Empty>
       ) : (
         <Table>
           <thead>
             <tr>
-              <th>Pole</th>
-              <th className="text-right">Latest cost / pole</th>
+              <th>{box ? "Box" : "Pole"}</th>
+              {box && <th>Size</th>}
+              <th className="text-right">Latest cost / {box ? "box" : "pole"}</th>
               <th className="text-right">Value on hand</th>
               <th className="text-right">On hand</th>
             </tr>
@@ -185,13 +192,14 @@ function SteelTable({ items }: { items: SteelData["items"] }) {
             {shown.map((i) => (
               <tr key={i.id}>
                 <td className="font-semibold">{i.name}</td>
+                {box && <td className="text-muted">{boxSize(i)}</td>}
                 <td className="text-right text-muted">{formatMoney(i.latestCost)}</td>
                 <td className="text-right">{formatMoney(i.value)}</td>
                 <td className={clsx("text-right text-xl font-semibold", negative(i.onHand))}>{i.onHand}</td>
               </tr>
             ))}
             <tr className="font-semibold">
-              <td colSpan={2}>Total</td>
+              <td colSpan={box ? 3 : 2}>Total</td>
               <td className="text-right">{formatMoney(sumMoney(shown.map((i) => i.value)))}</td>
               <td className="text-right text-xl">{shown.reduce((a, i) => a + i.onHand, 0)}</td>
             </tr>
@@ -199,15 +207,22 @@ function SteelTable({ items }: { items: SteelData["items"] }) {
         </Table>
       )}
       <p className="mt-3 text-sm text-muted">
-        Cost includes each invoice&apos;s freight, spread over its lines. Sales use the oldest poles first. A red number
-        means more was sold than we had recorded; the next delivery fills it in.
+        {box
+          ? "Each product sold takes one of its box. "
+          : "Cost includes each invoice's freight, spread over its lines. "}
+        Sales use the oldest {box ? "boxes" : "poles"} first. A red number means more was sold than we had recorded;
+        the next delivery fills it in.
       </p>
     </Card>
   );
 }
 
 function recipe(p: Product) {
-  return [...p.steel.map((s) => `${s.qty} × ${s.name}`), ...p.uses.map((u) => `${u.qty} × ${u.material} ${u.label}`)].join(" + ");
+  return [
+    ...p.steel.map((s) => `${s.qty} × ${s.name}`),
+    ...p.uses.map((u) => `${u.qty} × ${u.material} ${u.label}`),
+    ...(p.box ? [p.box.name] : []),
+  ].join(" + ");
 }
 
 function RecordSale({ products }: { products: Product[] }) {
@@ -215,8 +230,8 @@ function RecordSale({ products }: { products: Product[] }) {
   return (
     <Card title="Record a sale">
       <p className="mb-3 text-sm text-muted">
-        Takes the product&apos;s steel and fabric out of inventory. Shopify and Amazon orders will be recorded
-        automatically later; use this for anything else.
+        Takes the product&apos;s steel, fabric and box out of inventory. Amazon orders are recorded automatically
+        (see Orders); use this for sales anywhere else.
       </p>
       {sellable.length === 0 ? (
         <p className="text-muted">No products have a recipe yet. Set them up under Settings → Products.</p>
@@ -264,21 +279,33 @@ function RecentSales({ sales, canUndo }: { sales: SaleRow[]; canUndo: boolean })
         <p className="text-muted">None yet.</p>
       ) : (
         <ul className="divide-y divide-line">
-          {sales.map(({ sale, productName }) => (
+          {sales.map(({ sale, productName, order }) => (
             <li key={sale.id} className="flex flex-wrap items-center gap-3 py-2">
               <div className="min-w-0 flex-1">
                 <div className="font-medium">
-                  {sale.qty} × {productName} · steel {formatMoney(sale.steelCost)}
-                  {sale.short && <span className="ml-2 text-sm font-semibold text-danger">steel short</span>}
+                  {sale.qty} × {productName} · steel {formatMoney(sale.steelCost)} · box {formatMoney(sale.boxCost)}
+                  {sale.short && <span className="ml-2 text-sm font-semibold text-danger">short</span>}
                 </div>
                 <div className="text-sm text-muted">
                   {formatDate(sale.soldOn)} · {SALE_SOURCE[sale.source]}
-                  {sale.externalRef && ` #${sale.externalRef}`}
-                  {sale.note && ` · ${sale.note}`}
+                  {order ? (
+                    <>
+                      {order.marketplace && ` ${order.marketplace}`} ·{" "}
+                      <Link to={`/orders/${order.orderId}`} className="font-semibold text-brand">
+                        order {order.externalId}
+                      </Link>
+                    </>
+                  ) : (
+                    <>
+                      {sale.externalRef && ` #${sale.externalRef}`}
+                      {sale.note && ` · ${sale.note}`}
+                    </>
+                  )}
                 </div>
               </div>
-              {canUndo && (
-                <ActionForm action={post(`/api/sales/${sale.id}/void`)} confirm="Undo this sale? Its steel and fabric go back into inventory.">
+              {/* Channel sales are undone by a cancel on the channel, not here. */}
+              {canUndo && sale.source === "manual" && (
+                <ActionForm action={post(`/api/sales/${sale.id}/void`)} confirm="Undo this sale? Its steel, fabric and box go back into inventory.">
                   <SubmitButton variant="ghost">Undo</SubmitButton>
                 </ActionForm>
               )}
@@ -293,31 +320,37 @@ function RecentSales({ sales, canUndo }: { sales: SaleRow[]; canUndo: boolean })
 function AdjustSteel({ items }: { items: SteelData["items"] }) {
   const active = items.filter((i) => i.active);
   return (
-    <Card title="Adjust steel">
+    <Card title="Adjust steel & boxes">
       <p className="mb-3 text-sm text-muted">
-        For the opening count and corrections after a physical count. Adding poles needs their cost per pole; removing
-        takes from the oldest poles.
+        For the opening count and corrections after a physical count. Adding needs the cost of each one; removing takes
+        from the oldest first.
       </p>
       {active.length === 0 ? (
-        <p className="text-muted">Add steel items under Settings first.</p>
+        <p className="text-muted">Add steel items or boxes under Settings first.</p>
       ) : (
         <ActionForm action={post("/api/steel/adjustments")} resetOnSuccess className="grid gap-3 sm:grid-cols-2">
-          <Field label="Pole">
+          <Field label="Item">
             <Select name="steelItemId" required defaultValue="">
               <option value="" disabled>
-                Pick a pole
+                Pick a pole or box
               </option>
-              {active.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
+              {(["steel", "box"] as const).map((kind) => (
+                <optgroup key={kind} label={kind === "box" ? "Boxes" : "Steel"}>
+                  {active
+                    .filter((i) => i.kind === kind)
+                    .map((i) => (
+                      <option key={i.id} value={i.id}>
+                        {i.name}
+                      </option>
+                    ))}
+                </optgroup>
               ))}
             </Select>
           </Field>
           <Field label="Change (+/−)">
             <Input name="qty" type="number" step="1" inputMode="numeric" required />
           </Field>
-          <Field label="Cost per pole ($)" hint="Only when adding">
+          <Field label="Cost each ($)" hint="Only when adding">
             <Input name="unitCost" type="number" step="0.0001" min="0" inputMode="decimal" />
           </Field>
           <Field label="Reason">
@@ -347,7 +380,7 @@ function RecentSteel({ data }: { data: SteelData }) {
       id: lot.id,
       at: lot.createdAt,
       title: `+${lot.qty} × ${name} · ${LOT_SOURCE[lot.source]}${lot.invoiceNumber ? ` #${lot.invoiceNumber}` : ""}`,
-      detail: `${formatDate(lot.receivedOn)} · ${formatMoney(lot.landedUnitCost)}/pole${
+      detail: `${formatDate(lot.receivedOn)} · ${formatMoney(lot.landedUnitCost)} each${
         lot.freightPerUnit ? ` (incl. ${formatMoney(lot.freightPerUnit)} freight)` : ""
       } · ${lot.qtyRemaining} left${lot.note && lot.source !== "invoice" ? ` · ${lot.note}` : ""}`,
     })),
@@ -360,7 +393,7 @@ function RecentSteel({ data }: { data: SteelData }) {
   ].sort((a, b) => (a.at < b.at ? 1 : -1));
 
   return (
-    <Card title="Recent steel">
+    <Card title="Recent steel & boxes">
       {entries.length === 0 ? (
         <p className="text-muted">None yet. Steel invoices emailed by a steel supplier show up here.</p>
       ) : (

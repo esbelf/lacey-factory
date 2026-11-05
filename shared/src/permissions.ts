@@ -34,6 +34,8 @@ const PERMISSIONS = {
   "invoices:review": ["admin", "regular"],
   /** Record or undo a product sale by hand (sales channels record them automatically later). */
   "sales:record": ["admin", "regular"],
+  /** Orders page: see channel orders, link SKUs to products, start a sync. */
+  orders: ["admin", "regular"],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

@@ -1,6 +1,7 @@
 // Product sales. recordSale is the one entry point for every sales channel
 // (manual today; Shopify, Amazon and other APIs later): it takes the product's
-// steel (oldest lots first) and fabric pieces (oldest cut first) out of stock.
+// steel and shipping box (oldest lots first) and fabric pieces (oldest cut
+// first) out of stock.
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import {
@@ -11,6 +12,7 @@ import {
   products,
   productSteel,
   sales,
+  steelItems,
   steelLots,
   steelUsage,
 } from "../db/schema";
@@ -39,10 +41,15 @@ export async function recordSale(
     const [product] = await tx.select().from(products).where(eq(products.id, input.productId));
     if (!product) throw new UserError("Product not found.");
     const [steel, fabric] = await Promise.all([
-      tx.select().from(productSteel).where(eq(productSteel.productId, product.id)),
+      tx
+        .select({ steelItemId: productSteel.steelItemId, qty: productSteel.qty, kind: steelItems.kind })
+        .from(productSteel)
+        .innerJoin(steelItems, eq(productSteel.steelItemId, steelItems.id))
+        .where(eq(productSteel.productId, product.id)),
       tx.select().from(productComponents).where(eq(productComponents.productId, product.id)),
     ]);
-    if (steel.length === 0 && fabric.length === 0) {
+    // A box alone isn't a recipe: selling would take the box but no fabric or steel.
+    if (!steel.some((s) => s.kind === "steel") && fabric.length === 0) {
       throw new UserError(`${product.name} has no recipe yet. Set its steel and fabric under Settings → Products.`);
     }
 

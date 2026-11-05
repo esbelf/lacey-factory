@@ -16,6 +16,7 @@ import {
   summitShipments,
 } from "../db/schema";
 import type { DB } from "../db/types";
+import { UserError } from "./errors";
 import { subtractFeet } from "@lacey-factory/shared/feet";
 
 export type RollStatus = "uncut" | "partially_cut" | "closed";
@@ -243,27 +244,52 @@ export async function listProducts(db: DB) {
     .orderBy(asc(products.sortOrder), asc(products.name), asc(materials.name));
 
   const steel = await db
-    .select({ productId: productSteel.productId, steelItemId: productSteel.steelItemId, qty: productSteel.qty, name: steelItems.name })
+    .select({
+      productId: productSteel.productId,
+      steelItemId: productSteel.steelItemId,
+      qty: productSteel.qty,
+      name: steelItems.name,
+      kind: steelItems.kind,
+    })
     .from(productSteel)
     .innerJoin(steelItems, eq(productSteel.steelItemId, steelItems.id))
     .orderBy(asc(steelItems.sortOrder), asc(steelItems.name));
 
+  type Part = { steelItemId: string; qty: number; name: string };
   type Entry = {
     product: typeof products.$inferSelect;
     uses: { qty: number; label: string; material: string }[];
-    steel: { steelItemId: string; qty: number; name: string }[];
+    steel: Part[];
+    box: Part | null;
   };
   const byId = new Map<string, Entry>();
   for (const r of rows) {
-    const entry = byId.get(r.product.id) ?? {
-      product: r.product,
-      uses: [],
-      steel: steel.filter((s) => s.productId === r.product.id).map((s) => ({ steelItemId: s.steelItemId, qty: s.qty, name: s.name })),
-    };
+    let entry = byId.get(r.product.id);
+    if (!entry) {
+      const parts = steel.filter((s) => s.productId === r.product.id);
+      const part = (s: (typeof parts)[number]): Part => ({ steelItemId: s.steelItemId, qty: s.qty, name: s.name });
+      const box = parts.find((s) => s.kind === "box");
+      entry = {
+        product: r.product,
+        uses: [],
+        steel: parts.filter((s) => s.kind === "steel").map(part),
+        box: box ? part(box) : null,
+      };
+      byId.set(r.product.id, entry);
+    }
     if (r.sizeLabel && r.materialName && r.qty != null) {
       entry.uses.push({ qty: r.qty, label: r.sizeLabel, material: r.materialName });
     }
-    byId.set(r.product.id, entry);
   }
   return [...byId.values()];
+}
+
+/** A product's own SKU and packed weight. */
+export async function updateProductShipping(db: DB, id: string, input: { sku?: string | null; shipWeightLb: number | null }) {
+  const sku = input.sku?.trim() || null;
+  if (sku) {
+    const [clash] = await db.select({ id: products.id, name: products.name }).from(products).where(eq(products.sku, sku));
+    if (clash && clash.id !== id) throw new UserError(`SKU ${sku} is already used by ${clash.name}.`);
+  }
+  await db.update(products).set({ sku, shipWeightLb: input.shipWeightLb }).where(eq(products.id, id));
 }

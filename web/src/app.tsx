@@ -10,6 +10,8 @@ import { InboxPage } from "./pages/inbox";
 import { InventoryPage } from "./pages/inventory";
 import { NewRollPage } from "./pages/new-roll";
 import { NotFoundPage } from "./pages/not-found";
+import { OrderPage } from "./pages/order";
+import { OrdersPage } from "./pages/orders";
 import { RollPage } from "./pages/roll";
 import { RollsPage } from "./pages/rolls";
 import { SettingsPage } from "./pages/settings";
@@ -28,6 +30,8 @@ export function App() {
         <Route path="cut" element={<ToSewPage />} />
         <Route path="summit" element={<SummitPage />} />
         <Route path="inventory" element={<InventoryPage />} />
+        <Route path="orders" element={<RequirePermission need="orders"><OrdersPage /></RequirePermission>} />
+        <Route path="orders/:id" element={<RequirePermission need="orders"><OrderPage /></RequirePermission>} />
         <Route path="inbox" element={<RequirePermission need="invoices:review"><InboxPage /></RequirePermission>} />
         <Route path="settings" element={<RequirePermission need="settings"><SettingsPage /></RequirePermission>} />
         <Route path="users" element={<RequirePermission need="users"><UsersPage /></RequirePermission>} />

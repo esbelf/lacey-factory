@@ -36,6 +36,20 @@
       "when": 1793880009766,
       "tag": "0004_steel",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793884484545,
+      "tag": "0005_orders",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793886258347,
+      "tag": "0006_boxes",
+      "breakpoints": true
     }
   ]
 }
