@@ -3,11 +3,13 @@
 Internal app that tracks production: **roll received → cut → sewn (in-house or Summit) → inventory**.
 Replaces Katana MRP for inventory. Sales decrements (website / dealer / Amazon) come later.
 
-Stack: React + Vite (S3 + CloudFront) · Hono API (AWS Lambda) · Postgres + Drizzle (Neon in production, Docker locally) · Auth0.
+Stack: React + Vite (S3 + CloudFront) · Hono API (AWS Lambda) · Temporal worker (ECS Fargate + Temporal Cloud) · Postgres + Drizzle (Neon in production, Docker locally) · Auth0.
 
 ```
 Browser ──> CloudFront ──┬── /*      → S3 (React app)
                          └── /api/*  → Lambda (Hono) ──> Neon Postgres
+Gmail (eric@) ─watch─> Pub/Sub ─push─> /api/webhooks/gmail ─signal─> Temporal Cloud ─> ECS worker
+                                                                     (Gmail · S3 documents · Claude · Neon)
 ```
 
 ## How it works
@@ -17,14 +19,16 @@ Browser ──> CloudFront ──┬── /*      → S3 (React app)
 - **Inventory** (`/inventory`): on hand per sewn material + size (LakeMat and MuckMat share the same sewn piece). Adjustments for opening balance / counts.
 - Non-sewn materials (geogrid) go straight to inventory when cut.
 - Every entry records who did it; cuts, sewing, shipments and receipts can be undone.
-- **Catalog** (Settings → *Load LakeMat catalog*): adds TerraTex N06, TerraGrid RX1100, TerraTex HD NTPEP, TerraTex HPG-57, their cut sizes, and which pieces each product uses (`api/src/db/catalog.ts`). Only adds what's missing. Sizes arrive **switched off** at their finished length; enter the real cut length (with hem allowance) and turn each one on before cutting.
+- **Supplier invoices** (`/inbox`): when an email from a known supplier arrives at eric@lakemat.com, each PDF/photo attachment is saved to S3 and read by Claude. If every line maps to a supplier product (Settings → **Suppliers**, e.g. Hanes `38151` = TerraTex N06 12.5′×360′), the rolls are registered automatically — one per ticket number, dated by ship date, else document date, else the email's day. Anything unclear (unknown product, unreadable, size mismatch) waits in the Inbox with the lines pre-filled for a regular worker or the admin to fix and register. The same invoice number is never registered twice. The admin connects the mailbox with the **Connect Email** button in the header.
+- **Catalog** (Settings → *Load LakeMat catalog*): adds TerraTex N06, TerraGrid RX1100, TerraTex HD NTPEP, TerraTex HPG-57, their cut sizes, which pieces each product uses, and Hanes Geo Components as a roll supplier (`api/src/db/catalog.ts`; add Hanes's sender addresses under Suppliers). Only adds what's missing. Sizes arrive **switched off** at their finished length; enter the real cut length (with hem allowance) and turn each one on before cutting.
 
 ## Users and roles
 | | Factory worker | Regular worker | Admin |
 |---|:-:|:-:|:-:|
 | Register rolls, record cuts, mark sewn, Summit send/receive, view everything | ✓ | ✓ | ✓ |
-| Settings (materials, sizes, catalog), adjust inventory, close/reopen rolls, undo | | ✓ | ✓ |
-| **Users** dashboard (change roles) | | | ✓ |
+| Settings (materials, sizes, catalog, suppliers), adjust inventory, close/reopen rolls, undo | | ✓ | ✓ |
+| **Inbox**: review supplier invoices and register their rolls | | ✓ | ✓ |
+| **Users** dashboard (change roles), **Connect Email** | | | ✓ |
 
 - Everyone who passes the sign-in rule gets a user record the first time they sign in, **always as a factory worker**. The admin promotes people on the **Users** page.
 - The admin is always `eric@lakemat.com` (`ADMIN_EMAIL` in `shared/src/permissions.ts`). Nobody else can be made admin, and the admin's role can't be changed.
@@ -32,12 +36,20 @@ Browser ──> CloudFront ──┬── /*      → S3 (React app)
 
 ## Run locally
 ```bash
-cp .env.example .env
-docker compose up --build          # Postgres + API (:8787) + web (:5173)
+cp .env.example .env               # put your LOCALSTACK_AUTH_TOKEN in it (free account at localstack.cloud)
+docker compose up --build          # Postgres, Temporal (UI :8233), LocalStack S3 (:4566), API (:8787), worker, web (:5173)
 ```
+Stored documents are in LocalStack: `aws --endpoint-url http://localhost:4566 s3 ls s3://lacey-factory-documents-local/ --recursive` (any credentials, e.g. `AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test`).
 Open http://localhost:5173. With the default `.env`, Auth0 is skipped and you're `eric@lakemat.com` (admin). Type another email into the **dev as** box in the header to act as someone else (new emails start as factory workers).
 
-After changing dependencies, rebuild with fresh `node_modules` volumes: `docker compose up --build -V`.
+Try the supplier-invoice flow without Google: open the app, click **Connect Email** (instant in fake mode), set Hanes's *Sends from* to `@hanesgeo.com` under Settings → Suppliers after loading the catalog, then:
+```bash
+docker compose exec api npm run simulate -- hanes            # Hanes packing list photo
+docker compose exec api npm run simulate -- --file /app/api/fixtures/<file> --from billing@hanesgeo.com
+```
+With `ANTHROPIC_API_KEY` set in `.env`, the 4 rolls are registered automatically; without it the document lands in the Inbox for review. Workflows are visible in the Temporal UI at http://localhost:8233.
+
+Containers reinstall dependencies on start when `package-lock.json` changed (`scripts/dev-entrypoint.sh`), so a plain `docker compose up --build` picks up new packages.
 
 Checks (run on the host after `npm install`): `npm test` (API tests on in-process Postgres) · `npm run typecheck` · `npm run lint`.
 
@@ -57,4 +69,10 @@ Edit `api/src/db/schema.ts` → `npm run db:generate -w api` → commit the new 
    - S3 bucket (private) for `web/dist`, served through CloudFront with Origin Access Control. A viewer-request CloudFront Function rewrites non-file paths to `/index.html` for client-side routing (don't use custom error responses — they would also rewrite API errors).
    - Lambda (Node 22, handler `lambda.handler`) with a Function URL as a second CloudFront origin for `/api/*` (caching disabled, forward `Authorization`). Env vars: `DATABASE_URL`, `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `ALLOWED_EMAILS`, `NODE_ENV=production`. **Never** set `DEV_AUTH_EMAIL` (the handler refuses to start with it).
    - Route 53 alias `factory.lakemat.com` (and `staging.factory.lakemat.com`) → the distribution, with an ACM certificate in us-east-1.
-4. **Deploy**: copy `deploy/example.env` to `deploy/<env>.env`, then `scripts/deploy.sh staging` (or `production`). It runs the tests, builds, updates the Lambda code, syncs the site to S3 and invalidates `index.html`.
+4. **Supplier emails**
+   - **Google Cloud** (lakemat.com Workspace): enable the Gmail and Pub/Sub APIs. OAuth consent screen audience **Internal** (refresh tokens don't expire weekly), scope `gmail.readonly`. Create a *Web application* OAuth client with redirect URI `https://factory.lakemat.com/api/email/callback` (and `http://localhost:8787/api/email/callback` for local live mode). Create a Pub/Sub topic, give `gmail-api-push@system.gserviceaccount.com` *Pub/Sub Publisher* on it, and a **push** subscription to `https://factory.lakemat.com/api/webhooks/gmail` with OIDC authentication (audience = that URL).
+   - **Temporal Cloud**: create a namespace and an API key.
+   - **AWS**: a private S3 bucket for documents; an ECS Fargate service running `Dockerfile.worker` (0.25 vCPU / 512 MB is plenty) with S3 read/write on the bucket.
+   - **Env** — Lambda: add `GMAIL_MODE=live`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `APP_BASE_URL=https://factory.lakemat.com`, `GMAIL_PUBSUB_TOPIC`, `PUBSUB_MODE=push`, `PUBSUB_PUSH_AUDIENCE`, `EMAIL_TOKEN_KEY`, `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, `DOCUMENTS_BUCKET` (and S3 read on the bucket for "View document" links). Worker: the same minus the Pub/Sub push ones, plus `DATABASE_URL` and `ANTHROPIC_API_KEY`. Keep secrets in Secrets Manager.
+   - Then sign in as eric@lakemat.com and click **Connect Email**. The worker renews the Gmail watch daily (`renew-gmail-watch` schedule).
+5. **Deploy**: copy `deploy/example.env` to `deploy/<env>.env`, then `scripts/deploy.sh staging` (or `production`). It runs the tests, builds, updates the Lambda code, syncs the site to S3 and invalidates `index.html`.

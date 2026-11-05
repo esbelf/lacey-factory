@@ -3,6 +3,7 @@ import { formatFeet } from "@lacey-factory/shared/feet";
 import { patch, post, useApi } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { Loading } from "../components/loading";
+import { SuppliersCard } from "../components/suppliers-card";
 import { Card, Empty, Field, Input, PageHeader, Select } from "../components/ui";
 import { useTitle } from "../title";
 
@@ -176,9 +177,12 @@ export function SettingsPage() {
           </p>
         </Card>
 
+        <SuppliersCard materials={materials} />
+
         <Card title="LakeMat catalog">
           <p className="mb-3 text-base">
-            Adds TerraTex N06, TerraGrid RX1100, TerraTex HD NTPEP and TerraTex HPG-57 with their sizes and products.
+            Adds TerraTex N06, TerraGrid RX1100, TerraTex HD NTPEP and TerraTex HPG-57 with their sizes and products,
+            and Hanes Geo Components as a roll supplier.
             Only adds what&apos;s missing. Never changes what&apos;s already here.
           </p>
           <ActionForm action={post("/api/catalog/load")}>

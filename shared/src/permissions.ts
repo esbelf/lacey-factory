@@ -28,6 +28,10 @@ const PERMISSIONS = {
   undo: ["admin", "regular"],
   /** User dashboard: see users and change their role. */
   users: ["admin"],
+  /** Connect / disconnect the eric@lakemat.com mailbox. */
+  "email:connect": ["admin"],
+  /** Supplier inbox: see imported invoices, fix and register ones that need review. */
+  "invoices:review": ["admin", "regular"],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

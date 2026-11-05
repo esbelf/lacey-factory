@@ -1,7 +1,7 @@
 import { formatFeet, subtractFeet, todayInMichigan } from "@lacey-factory/shared/feet";
 import { useParams } from "react-router";
 
-import { post, useRoll } from "../api";
+import { documentFileUrl, post, useRoll } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { CutForm } from "../components/cut-form";
 import { Loading } from "../components/loading";
@@ -57,8 +57,14 @@ export function RollPage() {
           ) : (
             <Card title="Roll closed">
               <p>
-                Closed {formatDate(roll.closedOn)}. Measured leftover {formatFeet(roll.leftoverFtMeasured)} vs{" "}
-                {formatFeet(remainingFt)} computed
+                Closed {formatDate(roll.closedOn)}.{" "}
+                {roll.leftoverFtMeasured == null ? (
+                  <>{formatFeet(remainingFt)} left by our count</>
+                ) : (
+                  <>
+                    Measured leftover {formatFeet(roll.leftoverFtMeasured)} vs {formatFeet(remainingFt)} computed
+                  </>
+                )}
                 {drift != null && drift !== 0 && (
                   <>
                     {" "}
@@ -136,9 +142,6 @@ export function RollPage() {
                 className="flex flex-col gap-3"
                 confirm="Close out this roll?"
               >
-                <Field label="Leftover measured (ft)" hint="Measure what's really left, so we can see cutting drift.">
-                  <Input name="leftoverFtMeasured" type="number" step="0.01" min="0" inputMode="decimal" />
-                </Field>
                 <Field label="Closed on">
                   <Input name="closedOn" type="date" defaultValue={today} required />
                 </Field>
@@ -148,7 +151,26 @@ export function RollPage() {
               </ActionForm>
             </Card>
           )}
-          {roll.notes && <Card title="Notes">{roll.notes}</Card>}
+          {roll.notes && (
+            <Card title="Notes">
+              {roll.notes}
+              {roll.sourceDocumentId && can("invoices:review") && (
+                <button
+                  type="button"
+                  className="ml-2 text-brand underline"
+                  onClick={async () => {
+                    const tab = window.open("", "_blank");
+                    const url = await documentFileUrl(roll.sourceDocumentId!).catch(() => null);
+                    if (tab && url) tab.location.href = url;
+                    else tab?.close();
+                  }}
+                >
+                  View document
+                </button>
+              )}
+              {roll.sourceDocumentId && <div className="mt-1 text-sm text-muted">Registered from a supplier email.</div>}
+            </Card>
+          )}
         </div>
       </div>
     </>

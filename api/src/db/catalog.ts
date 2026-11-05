@@ -99,3 +99,15 @@ export const CATALOG_PRODUCTS: CatalogProduct[] = [
   { name: "Boatlift Mat XL", productLine: "Boatlift Mat", uses: [{ material: HPG57, size: "19x14", qty: 1 }] },
   { name: "Boatlift Mat Pontoon", productLine: "Boatlift Mat", uses: [{ material: HPG57, size: "24x14", qty: 1 }] },
 ];
+
+/**
+ * Roll suppliers and how their product codes map to our rolls. Sender email
+ * addresses are entered in Settings → Suppliers (not known here).
+ */
+export const CATALOG_SUPPLIERS = [
+  {
+    name: "Hanes Geo Components",
+    kind: "rolls" as const,
+    products: [{ productCode: "38151", descriptionMatch: "TERRATEX N06", material: N06, widthFt: 12.5, lengthFt: 360 }],
+  },
+];

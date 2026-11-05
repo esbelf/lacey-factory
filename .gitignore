@@ -11,3 +11,7 @@ npm-debug.log*
 !.env.example
 deploy/*.env
 !deploy/example.env
+
+# local dev data
+/api/tmp
+/api/fixtures/uploads

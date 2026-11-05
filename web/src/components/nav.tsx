@@ -6,12 +6,14 @@ import { Link, NavLink } from "react-router";
 import { DEV_AUTH, DEV_EMAIL_KEY } from "../api";
 import { useLogout } from "../auth";
 import { useCan, useMe } from "../me";
+import { EmailStatus } from "./email-status";
 
 const LINKS: { href: string; label: string; need?: Permission }[] = [
   { href: "/rolls", label: "Rolls" },
   { href: "/cut", label: "To sew" },
   { href: "/summit", label: "Summit" },
   { href: "/inventory", label: "Inventory" },
+  { href: "/inbox", label: "Inbox", need: "invoices:review" },
   { href: "/settings", label: "Settings", need: "settings" },
   { href: "/users", label: "Users", need: "users" },
 ];
@@ -44,6 +46,7 @@ export function Nav() {
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-3 text-sm text-white/80">
+          <EmailStatus />
           {DEV_AUTH ? (
             <DevUserSwitch email={me?.email} />
           ) : (

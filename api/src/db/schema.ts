@@ -4,6 +4,7 @@ import {
   date,
   index,
   integer,
+  jsonb,
   numeric,
   pgEnum,
   pgTable,
@@ -82,6 +83,8 @@ export const rolls = pgTable(
     closedOn: date("closed_on", { mode: "string" }),
     leftoverFtMeasured: feet("leftover_ft_measured"),
     notes: text("notes"),
+    // Set when the roll was registered from a supplier invoice email.
+    sourceDocumentId: uuid("source_document_id").references(() => supplierDocuments.id),
     createdBy: text("created_by").notNull(),
     createdAt: createdAt(),
   },
@@ -234,4 +237,118 @@ export const users = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("users_email_unique").on(t.email)],
+);
+
+// ───────────── Supplier emails → invoices ─────────────
+
+export const emailAccountStatus = pgEnum("email_account_status", ["connected", "needs_reauth", "disconnected"]);
+
+/** The Gmail mailbox we read supplier emails from (eric@lakemat.com). */
+export const emailAccounts = pgTable(
+  "email_accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    email: text("email").notNull(),
+    /** Google refresh token, AES-256-GCM encrypted with EMAIL_TOKEN_KEY. */
+    refreshTokenEnc: text("refresh_token_enc"),
+    status: emailAccountStatus("status").notNull().default("disconnected"),
+    historyId: text("history_id"),
+    watchExpiresAt: timestamp("watch_expires_at", { withTimezone: true }),
+    connectedBy: text("connected_by"),
+    connectedAt: timestamp("connected_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("email_accounts_email_unique").on(t.email)],
+);
+
+/** One-time state for the Google OAuth redirect (the callback has no app login). */
+export const oauthStates = pgTable("oauth_states", {
+  state: text("state").primaryKey(),
+  userEmail: text("user_email").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  createdAt: createdAt(),
+});
+
+/** What a supplier sends us. Each kind has its own handler in api/src/temporal/handlers. */
+export const supplierKind = pgEnum("supplier_kind", ["rolls"]);
+
+export const suppliers = pgTable(
+  "suppliers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    kind: supplierKind("kind").notNull(),
+    /** Sender addresses ("billing@hanes.com") or whole domains ("@hanesgeo.com"). */
+    emailPatterns: text("email_patterns").array().notNull().default(sql`'{}'::text[]`),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("suppliers_name_unique").on(t.name)],
+);
+
+/** How a supplier's product line maps to one of our rolls (e.g. Hanes 38151 → TerraTex N06 12.5×360). */
+export const supplierProducts = pgTable(
+  "supplier_products",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    supplierId: uuid("supplier_id")
+      .notNull()
+      .references(() => suppliers.id),
+    productCode: text("product_code"),
+    /** Matched (case-insensitive substring) when the code is missing or unknown. */
+    descriptionMatch: text("description_match"),
+    materialId: uuid("material_id")
+      .notNull()
+      .references(() => materials.id),
+    widthFt: feet("width_ft").notNull(),
+    lengthFt: feet("length_ft").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("supplier_products_code_unique").on(t.supplierId, t.productCode)],
+);
+
+export const documentStatus = pgEnum("document_status", [
+  "processing",
+  "registered",
+  "needs_review",
+  "not_invoice",
+  "duplicate",
+  "failed",
+]);
+
+/** One attachment from a supplier email, archived in S3 and read by Claude. */
+export const supplierDocuments = pgTable(
+  "supplier_documents",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    supplierId: uuid("supplier_id")
+      .notNull()
+      .references(() => suppliers.id),
+    account: text("account").notNull(),
+    gmailMessageId: text("gmail_message_id").notNull(),
+    sha256: text("sha256").notNull(),
+    filename: text("filename").notNull(),
+    mimeType: text("mime_type").notNull(),
+    emailFrom: text("email_from").notNull(),
+    emailSubject: text("email_subject").notNull(),
+    emailReceivedAt: timestamp("email_received_at", { withTimezone: true }).notNull(),
+    s3Key: text("s3_key").notNull(),
+    documentType: text("document_type"),
+    invoiceNumber: text("invoice_number"),
+    invoiceDate: date("invoice_date", { mode: "string" }),
+    shipDate: date("ship_date", { mode: "string" }),
+    /** Claude's reading of the document (DocumentExtraction). */
+    extracted: jsonb("extracted"),
+    status: documentStatus("status").notNull().default("processing"),
+    reviewReason: text("review_reason"),
+    reviewedBy: text("reviewed_by"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("supplier_documents_message_file_unique").on(t.gmailMessageId, t.sha256),
+    index("supplier_documents_status_idx").on(t.status),
+    index("supplier_documents_invoice_idx").on(t.supplierId, t.invoiceNumber),
+  ],
 );

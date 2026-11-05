@@ -1,10 +1,12 @@
 # Local development image shared by the api and web services in
 # docker-compose.yml. Source is bind-mounted; node_modules live in the image
-# (Linux builds of native deps like esbuild), not on the host.
-FROM node:22-alpine
+# (Linux builds of native deps like esbuild and Temporal's core-bridge, which needs glibc), not on the host.
+FROM node:22-bookworm-slim
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY shared/package.json shared/
 COPY api/package.json api/
 COPY web/package.json web/
-RUN npm ci
+RUN npm ci && sha256sum package-lock.json > node_modules/.lock-sha256
+# Reinstalls on start if package-lock.json changed since the node_modules volume was filled.
+ENTRYPOINT ["/app/scripts/dev-entrypoint.sh"]

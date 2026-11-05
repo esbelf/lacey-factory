@@ -22,6 +22,13 @@
       "when": 1793809973746,
       "tag": "0002_users",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793813870085,
+      "tag": "0003_email_invoices",
+      "breakpoints": true
     }
   ]
 }

@@ -1,10 +1,10 @@
 import { and, eq } from "drizzle-orm";
 
-import { CATALOG_MATERIALS, CATALOG_PRODUCTS } from "../db/catalog";
-import { cutSizes, materials, productComponents, products } from "../db/schema";
+import { CATALOG_MATERIALS, CATALOG_PRODUCTS, CATALOG_SUPPLIERS } from "../db/catalog";
+import { cutSizes, materials, productComponents, products, supplierProducts, suppliers } from "../db/schema";
 import type { DB } from "../db/types";
 
-export type CatalogResult = { materials: number; sizes: number; products: number; components: number };
+export type CatalogResult = { materials: number; sizes: number; products: number; components: number; suppliers: number };
 
 /**
  * Adds Lacey's catalog (materials, cut sizes, products) where missing.
@@ -14,7 +14,7 @@ export type CatalogResult = { materials: number; sizes: number; products: number
  */
 export async function loadCatalog(db: DB): Promise<CatalogResult> {
   return db.transaction(async (tx) => {
-    const added: CatalogResult = { materials: 0, sizes: 0, products: 0, components: 0 };
+    const added: CatalogResult = { materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0 };
     const sizeId = new Map<string, string>(); // "material|label" → id
 
     for (const m of CATALOG_MATERIALS) {
@@ -68,6 +68,22 @@ export async function loadCatalog(db: DB): Promise<CatalogResult> {
           .onConflictDoNothing()
           .returning({ id: productComponents.id });
         added.components += inserted.length;
+      }
+    }
+
+    for (const sup of CATALOG_SUPPLIERS) {
+      let [row] = await tx.select({ id: suppliers.id }).from(suppliers).where(eq(suppliers.name, sup.name));
+      if (!row) {
+        [row] = await tx.insert(suppliers).values({ name: sup.name, kind: sup.kind }).returning({ id: suppliers.id });
+        added.suppliers++;
+      }
+      for (const p of sup.products) {
+        const [mat] = await tx.select({ id: materials.id }).from(materials).where(eq(materials.name, p.material));
+        if (!mat) throw new Error(`Catalog error: ${sup.name} product ${p.productCode} uses unknown material ${p.material}`);
+        await tx
+          .insert(supplierProducts)
+          .values({ supplierId: row.id, productCode: p.productCode, descriptionMatch: p.descriptionMatch, materialId: mat.id, widthFt: p.widthFt, lengthFt: p.lengthFt })
+          .onConflictDoNothing();
       }
     }
     return added;

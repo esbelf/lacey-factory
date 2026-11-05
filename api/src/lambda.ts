@@ -3,11 +3,10 @@
 import { handle } from "hono/aws-lambda";
 
 import { createApp } from "./app";
-import { authenticate } from "./auth";
-import { getDb } from "./db";
+import { appDeps } from "./deps";
 
 if (process.env.DEV_AUTH_EMAIL) {
   throw new Error("DEV_AUTH_EMAIL must never be set in Lambda.");
 }
 
-export const handler = handle(createApp({ getDb, authenticate }));
+export const handler = handle(createApp(appDeps));

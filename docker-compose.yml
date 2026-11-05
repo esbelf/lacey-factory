@@ -1,7 +1,46 @@
-# Runs the whole app locally: Postgres, the Hono API and the Vite dev server.
-#   docker compose up --build      → http://localhost:5173
-# After changing dependencies:  docker compose up --build -V
+# Runs the whole app locally: Postgres, Temporal, S3 (LocalStack), the Hono API,
+# the Temporal worker and the Vite dev server.
+# LocalStack needs LOCALSTACK_AUTH_TOKEN in .env (free account at localstack.cloud).
+#   docker compose up --build      → app http://localhost:5173, Temporal UI http://localhost:8233
+# New dependencies are installed automatically on start (scripts/dev-entrypoint.sh).
 # Settings come from .env (copy .env.example).
+
+x-node: &node
+  build: { context: ., dockerfile: Dockerfile.dev }
+  volumes:
+    - .:/app
+    - /app/node_modules
+    - /app/api/node_modules
+    - /app/web/node_modules
+
+x-api-env: &api-env
+  NODE_ENV: development
+  DATABASE_URL: postgres://factory:factory@db:5432/factory
+  # Skip Auth0 and act as this user. Leave empty in .env to use real Auth0.
+  DEV_AUTH_EMAIL: ${DEV_AUTH_EMAIL-eric@lakemat.com}
+  AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+  AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
+  ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+  APP_BASE_URL: http://localhost:5173
+  # Addresses are the in-network ones; .env's localhost values are for host-side runs.
+  TEMPORAL_ADDRESS: temporal:7233
+  TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+  TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-lacey-factory}
+  DOCUMENTS_BUCKET: ${DOCUMENTS_BUCKET:-lacey-factory-documents-local}
+  AWS_REGION: ${AWS_REGION:-us-east-2}
+  AWS_ENDPOINT_URL: http://localstack:4566
+  AWS_PUBLIC_ENDPOINT_URL: ${AWS_PUBLIC_ENDPOINT_URL:-http://localhost:4566}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+  # "fake" reads emails written by `npm run simulate`; "live" uses real Gmail.
+  GMAIL_MODE: ${GMAIL_MODE:-fake}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8787/api/email/callback}
+  GMAIL_PUBSUB_TOPIC: ${GMAIL_PUBSUB_TOPIC:-}
+  EMAIL_TOKEN_KEY: ${EMAIL_TOKEN_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-opus-5-5}
 
 services:
   db:
@@ -20,20 +59,50 @@ services:
       timeout: 3s
       retries: 20
 
+  temporal:
+    image: temporalio/temporal:1.9.1
+    # Also creates TEMPORAL_NAMESPACE if it isn't "default".
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/home/temporal/temporal.db", "--namespace", "${TEMPORAL_NAMESPACE:-default}"]
+    ports:
+      - "7233:7233"
+      - "8233:8233" # Temporal UI
+    volumes:
+      - temporal-data:/home/temporal
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "localhost:7233"]
+      interval: 3s
+      retries: 30
+
+  localstack:
+    image: localstack/localstack:2026.10.4
+    ports:
+      - "4566:4566"
+    environment:
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:?Set LOCALSTACK_AUTH_TOKEN in .env (free account at localstack.cloud)}
+      SERVICES: s3
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-2}
+      DOCUMENTS_BUCKET: ${DOCUMENTS_BUCKET:-lacey-factory-documents-local}
+    volumes:
+      - ./infra/localstack/init/ready.d:/etc/localstack/init/ready.d:ro
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      # Healthy only once the init script has created the bucket. The image has no curl, so use its Python.
+      test: ["CMD", "python3", "-c", "import json,urllib.request as u; d=json.load(u.urlopen('http://localhost:4566/_localstack/init/ready')); raise SystemExit(0 if d['completed'] else 1)"]
+      interval: 3s
+      retries: 40
+
   api:
-    build: { context: ., dockerfile: Dockerfile.dev }
+    <<: *node
     working_dir: /app/api
     # Applies any new migrations, then starts the API with reload on save.
     command: sh -c "npm run db:migrate && npm run dev"
     environment:
-      NODE_ENV: development
+      <<: *api-env
       PORT: "8787"
-      DATABASE_URL: postgres://factory:factory@db:5432/factory
-      # Skip Auth0 and act as this user. Leave empty in .env to use real Auth0.
-      DEV_AUTH_EMAIL: ${DEV_AUTH_EMAIL-eric@lakemat.com}
-      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
-      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
-      ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+      PUBSUB_MODE: ${PUBSUB_MODE:-off}
+      GMAIL_PUBSUB_SUBSCRIPTION: ${GMAIL_PUBSUB_SUBSCRIPTION:-}
+      # Service-account key for PUBSUB_MODE=pull, from GOOGLE_CREDENTIALS_DIR (mounted below).
+      GOOGLE_APPLICATION_CREDENTIALS: /run/google/${GOOGLE_CREDENTIALS_FILE:-pubsub-sa.json}
     ports:
       - "8787:8787"
     volumes:
@@ -41,12 +110,33 @@ services:
       - /app/node_modules
       - /app/api/node_modules
       - /app/web/node_modules
+      - ${GOOGLE_CREDENTIALS_DIR:-${HOME}/.config/lacey-factory}:/run/google:ro
     depends_on:
       db:
         condition: service_healthy
+      temporal:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+  worker:
+    <<: *node
+    working_dir: /app/api
+    command: npm run worker:dev
+    environment:
+      <<: *api-env
+    depends_on:
+      db:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      api:
+        condition: service_started
 
   web:
-    build: { context: ., dockerfile: Dockerfile.dev }
+    <<: *node
     working_dir: /app/web
     command: npm run dev
     environment:
@@ -57,13 +147,10 @@ services:
       VITE_AUTH0_AUDIENCE: ${VITE_AUTH0_AUDIENCE:-}
     ports:
       - "5173:5173"
-    volumes:
-      - .:/app
-      - /app/node_modules
-      - /app/api/node_modules
-      - /app/web/node_modules
     depends_on:
       - api
 
 volumes:
   pgdata:
+  temporal-data:
+  localstack-data:

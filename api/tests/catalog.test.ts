@@ -20,11 +20,11 @@ beforeAll(async () => {
 
 describe("LakeMat catalog", () => {
   it("adds the four materials, 13 sizes and 15 products", async () => {
-    expect(await loadCatalog(db)).toEqual({ materials: 4, sizes: 13, products: 15, components: 18 });
+    expect(await loadCatalog(db)).toEqual({ materials: 4, sizes: 13, products: 15, components: 18, suppliers: 1 });
   });
 
   it("adds nothing the second time", async () => {
-    expect(await loadCatalog(db)).toEqual({ materials: 0, sizes: 0, products: 0, components: 0 });
+    expect(await loadCatalog(db)).toEqual({ materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0 });
   });
 
   it("loads sizes switched off, and doesn't overwrite a cut length set later", async () => {

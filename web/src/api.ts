@@ -57,11 +57,22 @@ const reads = {
   activity: () => client.activity.$get(),
   adjustments: () => client.adjustments.$get(),
   users: () => client.users.$get(),
+  emailStatus: () => client.email.status.$get(),
+  documents: () => client.documents.$get(),
+  suppliers: () => client.suppliers.$get(),
 };
 
 export type Me = Data<typeof client.me.$get>;
 export type UserRow = Data<typeof client.users.$get>[number];
 export type Roll = Data<(typeof client.rolls)[":id"]["$get"]>;
+export type SupplierDocument = Data<typeof client.documents.$get>[number];
+export type Supplier = Data<typeof client.suppliers.$get>[number];
+
+/** Short-lived link to view a stored supplier document. */
+export async function documentFileUrl(id: string): Promise<string> {
+  const res = await client.documents[":id"].file.$get({ param: { id } });
+  return (await unwrap<{ url: string }>(res)).url;
+}
 
 type Reads = typeof reads;
 type ReadData<K extends keyof Reads> = Exclude<Awaited<ReturnType<Awaited<ReturnType<Reads[K]>>["json"]>>, { error: string }>;
@@ -87,7 +98,7 @@ export function useRoll(id: string) {
 
 // ── Writes ──
 export type Fields = Record<string, unknown>;
-export type MutationResult = { ok: string; id?: string };
+export type MutationResult = { ok: string; id?: string; url?: string };
 export type Mutation = (fields: Fields) => Promise<MutationResult>;
 
 async function send(method: "POST" | "PATCH", path: string, fields: Fields): Promise<MutationResult> {

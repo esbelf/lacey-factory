@@ -25,6 +25,9 @@ beforeAll(async () => {
   db = pg as unknown as DB;
   app = createApp({
     getDb: () => db,
+    notifyMailbox: async () => {},
+    verifyPushToken: async () => false,
+    documentUrl: async (key) => `https://files.test/${key}`,
     authenticate: async (req) => {
       const email = req.headers.get("x-test-email");
       if (!email) return null;

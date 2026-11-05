@@ -6,6 +6,7 @@ import { useApi } from "./api";
 import { Nav } from "./components/nav";
 import { Denied, Splash } from "./components/splash";
 import { useCan } from "./me";
+import { InboxPage } from "./pages/inbox";
 import { InventoryPage } from "./pages/inventory";
 import { NewRollPage } from "./pages/new-roll";
 import { NotFoundPage } from "./pages/not-found";
@@ -27,6 +28,7 @@ export function App() {
         <Route path="cut" element={<ToSewPage />} />
         <Route path="summit" element={<SummitPage />} />
         <Route path="inventory" element={<InventoryPage />} />
+        <Route path="inbox" element={<RequirePermission need="invoices:review"><InboxPage /></RequirePermission>} />
         <Route path="settings" element={<RequirePermission need="settings"><SettingsPage /></RequirePermission>} />
         <Route path="users" element={<RequirePermission need="users"><UsersPage /></RequirePermission>} />
         <Route path="*" element={<NotFoundPage />} />
