@@ -3,3 +3,4 @@
 export { mailboxWorkflow } from "./mailbox";
 export { processEmailWorkflow } from "./process-email";
 export { renewWatchWorkflow } from "./renew-watch";
+export { amazonSyncWorkflow } from "./amazon-sync";

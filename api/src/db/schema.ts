@@ -500,3 +500,118 @@ export const steelUsage = pgTable(
   },
   (t) => [index("steel_usage_item_idx").on(t.steelItemId), index("steel_usage_sale_idx").on(t.saleId)],
 );
+
+// ── Sales-channel orders (Amazon today; Shopify and others later) ──
+
+export const orderItemState = pgEnum("order_item_state", [
+  "waiting", // order not paid yet (Amazon "Pending"): nothing taken from stock
+  "recorded", // a sale was recorded and its steel and fabric taken
+  "needs_mapping", // the SKU isn't linked to a product yet
+  "needs_recipe", // the product has no steel/fabric recipe yet
+  "canceled", // order canceled; any sale was undone
+  "ignored", // SKU marked "not a factory product"
+]);
+
+/** An order from a sales channel, kept as the channel sent it (`raw`) plus the fields we filter on. */
+export const orders = pgTable(
+  "orders",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    source: saleSource("source").notNull(),
+    /** The channel's order number, e.g. Amazon's 112-1234567-1234567. */
+    externalId: text("external_id").notNull(),
+    marketplaceId: text("marketplace_id"),
+    /** Short market code: US, CA. */
+    marketplace: text("marketplace"),
+    salesChannel: text("sales_channel"),
+    status: text("status").notNull(),
+    fulfillmentChannel: text("fulfillment_channel"),
+    orderType: text("order_type"),
+    purchasedAt: timestamp("purchased_at", { withTimezone: true }).notNull(),
+    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull(),
+    earliestShipDate: timestamp("earliest_ship_date", { withTimezone: true }),
+    latestShipDate: timestamp("latest_ship_date", { withTimezone: true }),
+    latestDeliveryDate: timestamp("latest_delivery_date", { withTimezone: true }),
+    currency: text("currency"),
+    orderTotal: money("order_total"),
+    itemsShipped: integer("items_shipped"),
+    itemsUnshipped: integer("items_unshipped"),
+    paymentMethod: text("payment_method"),
+    shipServiceLevel: text("ship_service_level"),
+    isPrime: boolean("is_prime").notNull().default(false),
+    isBusiness: boolean("is_business").notNull().default(false),
+    isReplacement: boolean("is_replacement").notNull().default(false),
+    shipCity: text("ship_city"),
+    shipState: text("ship_state"),
+    shipPostalCode: text("ship_postal_code"),
+    shipCountry: text("ship_country"),
+    /** Everything the channel sent for the order. */
+    raw: jsonb("raw").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("orders_source_external_unique").on(t.source, t.externalId),
+    index("orders_purchased_idx").on(t.purchasedAt),
+  ],
+);
+
+export const orderItems = pgTable(
+  "order_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id),
+    externalItemId: text("external_item_id").notNull(),
+    sku: text("sku"),
+    asin: text("asin"),
+    title: text("title"),
+    qtyOrdered: integer("qty_ordered").notNull(),
+    qtyShipped: integer("qty_shipped").notNull().default(0),
+    /** In the order's currency. */
+    itemPrice: money("item_price"),
+    itemTax: money("item_tax"),
+    shippingPrice: money("shipping_price"),
+    shippingTax: money("shipping_tax"),
+    promotionDiscount: money("promotion_discount"),
+    raw: jsonb("raw").notNull(),
+    state: orderItemState("state").notNull().default("waiting"),
+    /** Why it isn't recorded (missing mapping or recipe). */
+    problem: text("problem"),
+    productId: uuid("product_id").references(() => products.id),
+    saleId: uuid("sale_id").references(() => sales.id),
+  },
+  (t) => [
+    uniqueIndex("order_items_external_unique").on(t.orderId, t.externalItemId),
+    index("order_items_sku_idx").on(t.sku),
+  ],
+);
+
+/** Which product a channel SKU is. No product = "not a factory product", ignored. */
+export const channelSkus = pgTable(
+  "channel_skus",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    source: saleSource("source").notNull(),
+    sku: text("sku").notNull(),
+    productId: uuid("product_id").references(() => products.id),
+    /** Products per unit sold (a 2-pack is 2). */
+    qtyPerUnit: integer("qty_per_unit").notNull().default(1),
+    note: text("note"),
+    createdBy: text("created_by").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("channel_skus_source_sku_unique").on(t.source, t.sku)],
+);
+
+/** Polling cursor and health, one row per channel. */
+export const channelSync = pgTable("channel_sync", {
+  source: saleSource("source").primaryKey(),
+  /** Orders updated up to here have been processed. */
+  cursor: timestamp("cursor", { withTimezone: true }),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  lastOkAt: timestamp("last_ok_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  ordersSeen: integer("orders_seen").notNull().default(0),
+});

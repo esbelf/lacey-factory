@@ -6,11 +6,12 @@ import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
 import type { Authenticate } from "./auth";
-import { emailConfig } from "./config";
+import { amazonConfig, emailConfig } from "./config";
 import type { DB } from "./db/types";
 import { loadCatalog } from "./domain/catalog";
 import { UserError } from "./domain/errors";
 import * as inv from "./domain/invoices";
+import * as ord from "./domain/orders";
 import * as q from "./domain/queries";
 import * as salesSvc from "./domain/sales";
 import * as svc from "./domain/services";
@@ -62,6 +63,8 @@ export type AppDeps = {
   verifyPushToken: (token: string) => Promise<boolean>;
   /** Short-lived link to a stored document. */
   documentUrl: (key: string) => Promise<string>;
+  /** Start an Amazon order sync now (Temporal). */
+  startAmazonSync: () => Promise<"started" | "running">;
 };
 
 /** Routes that skip the app login: browser redirect from Google, and Pub/Sub pushes. */
@@ -179,7 +182,11 @@ export function createApp(deps: AppDeps) {
       const [items, activity] = await Promise.all([steel.steelSummary(c.var.db), steel.steelActivity(c.var.db)]);
       return c.json({ items, ...activity });
     })
-    .get("/sales", async (c) => c.json(await salesSvc.listSales(c.var.db)))
+    .get("/sales", async (c) => {
+      const rows = await salesSvc.listSales(c.var.db);
+      const links = await ord.orderIdsForSales(c.var.db, rows.map((r) => r.sale.id));
+      return c.json(rows.map((r) => ({ ...r, order: links.get(r.sale.id) ?? null })));
+    })
 
     // ── Settings ──
     .post("/materials", need("settings"), async (c) => {
@@ -242,6 +249,8 @@ export function createApp(deps: AppDeps) {
         z.object({ steelItemId: z.string().uuid("Pick a steel item."), qty: z.coerce.number().int("Whole numbers only.").min(0) }),
       );
       await steel.setProductSteel(c.var.db, { ...i, productId: param(c, "id") });
+      // Channel orders that were waiting for this product's recipe can be recorded now.
+      await ord.retryProblems(c.var.db);
       return ok(c, i.qty === 0 ? "Removed." : "Saved.");
     })
     .post("/catalog/load", need("settings"), async (c) => {
@@ -374,6 +383,54 @@ export function createApp(deps: AppDeps) {
     .post("/sales/:id/void", need("sales:record"), async (c) => {
       await salesSvc.voidSale(c.var.db, c.var.user.email, param(c, "id"));
       return ok(c, "Sale undone.");
+    })
+
+    // ── Channel orders (Amazon) ──
+    .get("/orders", need("orders"), async (c) => {
+      const f = c.req.query();
+      return c.json(
+        await ord.listOrders(c.var.db, {
+          marketplace: f.marketplace || undefined,
+          status: f.status || undefined,
+          problemsOnly: f.problems === "1",
+          q: f.q || undefined,
+          before: f.before || undefined,
+        }),
+      );
+    })
+    .get("/orders/status", need("orders"), async (c) => {
+      const [sync, problems] = await Promise.all([ord.syncState(c.var.db, "amazon"), ord.orderProblems(c.var.db)]);
+      return c.json({ mode: amazonConfig().mode, sync, problems });
+    })
+    .get("/orders/:id", need("orders"), async (c) => {
+      const order = await ord.getOrder(c.var.db, param(c, "id"));
+      if (!order) throw new HTTPException(404, { message: "Order not found." });
+      return c.json(order);
+    })
+    .post("/orders/sync", need("orders"), async (c) => {
+      if (amazonConfig().mode === "off") throw new UserError("Amazon is off. Set AMAZON_MODE in .env.");
+      const r = await deps.startAmazonSync();
+      return ok(c, r === "running" ? "A sync is already running." : "Syncing Amazon orders… refresh in a moment.");
+    })
+    .get("/channel-skus", need("orders"), async (c) => c.json(await ord.listChannelSkus(c.var.db)))
+    .post("/channel-skus", need("orders"), async (c) => {
+      const i = await input(
+        c,
+        z.object({
+          sku: z.string().trim().min(1, "Enter the SKU."),
+          // "" or "ignore" = not a factory product
+          productId: z.preprocess((v) => (v === "" || v === "ignore" ? null : v), z.string().uuid("Pick a product.").nullable()),
+          qtyPerUnit: z.preprocess((v) => (v === "" || v == null ? 1 : v), qty),
+          note: text,
+        }),
+      );
+      const retried = await ord.mapSku(c.var.db, c.var.user.email, { source: "amazon", ...i });
+      const what = i.productId ? `Linked ${i.sku}.` : `${i.sku} marked as not a factory product.`;
+      return ok(c, retried ? `${what} Updated ${retried} waiting order${retried === 1 ? "" : "s"}.` : what);
+    })
+    .post("/channel-skus/:id/delete", need("orders"), async (c) => {
+      await ord.removeChannelSku(c.var.db, param(c, "id"));
+      return ok(c, "SKU link removed.");
     })
 
     // ── Supplier email (admin) ──

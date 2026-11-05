@@ -11,6 +11,7 @@ Stack: React + Vite SPA (S3 + CloudFront) → Hono API (AWS Lambda behind the sa
 ```bash
 docker compose up --build            # everything locally: db, temporal (UI :8233), localstack S3 :4566, api :8787, worker, web :5173 (needs LOCALSTACK_AUTH_TOKEN)
 docker compose exec api npm run simulate -- hanes   # fake supplier email (GMAIL_MODE=fake)
+docker compose exec api npm run simulate:amazon -- us   # fake Amazon order + sync (AMAZON_MODE=fake); ca, pending, cancel, unknown-sku…
 npm run read-document -w api -- <file.pdf> "Supplier"   # what Claude reads from a document (one API call, needs ANTHROPIC_API_KEY)
 
 npm test                             # API tests (vitest, real Postgres via in-process PGlite)
@@ -73,6 +74,11 @@ npm workspaces:
 - Steel on hand = sum of `steel_lots.qty_remaining` minus unfilled shortage rows. Lots are FIFO cost layers (invoice lines, opening balances, count corrections); `steel_usage` records every pole taken, by lot.
 - `recordSale` is the single entry point for every sales channel (only `manual` exists today; integrations pass `source` + `externalRef`, which is unique, so a re-sent order returns the first sale). It takes `product_steel` poles oldest lot first and `product_components` pieces oldest `cutOn` first (status `sold`, `pieces.sale_id`), falling back to a negative `sale` adjustment when pieces run out. It never refuses for lack of stock: missing steel becomes a usage row with no lot (sale `short`), filled in by `settleShortages` when the next lot arrives, which also corrects the sale's `steel_cost`.
 - `voidSale` returns poles to their lots, pieces to `in_stock`, and deletes its adjustments. Undoing a cut, sewing batch or Summit receipt is refused while any of its pieces are `sold`.
+
+**Amazon orders** (`api/src/amazon/`, `api/src/domain/orders.ts`, `temporal/workflows/amazon-sync.ts`).
+- `amazonSyncWorkflow` runs on the `amazon-order-sync` schedule (every `AMAZON_SYNC_EVERY`, created/updated/removed by the worker per `AMAZON_MODE`) or from "Sync now" (workflow id `amazon-sync-now`). Steps: `amazonSyncBegin` (cursor − 5 min overlap, never later than now − 2 min, as SP-API requires) → `amazonSyncPage` per NextToken page (fetches items only for orders whose `LastUpdateDate` changed; `saveOrder` + `applyOrder`) → `amazonSyncEnd` (retries waiting lines, moves `channel_sync.cursor`). Failures land in `channel_sync.last_error` for the Orders page.
+- `OrderSource` is `LiveOrderSource` (`sp-api.ts`: LWA refresh-token exchange + Orders v0, sandbox or live NA host; the sandbox only answers `CreatedAfter=TEST_CASE_200`) or `FakeOrderSource` (SP-API-shaped JSON files in `AMAZON_FAKE_DIR`, written by `scripts/simulate-amazon.ts` from `amazon/fake-orders.ts`). `SpApiError.retryable` (429/5xx) decides Temporal retries.
+- `orders` / `order_items` are channel-neutral (`source`), keep the channel's JSON in `raw`, and an older copy never overwrites a newer one. `applyOrder` is idempotent: paid statuses (Unshipped/PartiallyShipped/Shipped/InvoiceUnconfirmed) → `recordSale` with `externalRef = amazon:<orderId>:<orderItemId>` and qty × `channel_skus.qty_per_unit`; Pending → `waiting`; Canceled/Unfulfillable → `voidSale`. Unknown SKU → `needs_mapping`, recipe-less product (`recordSale`'s UserError) → `needs_recipe`; `mapSku` and recipe changes call `retryProblems`. Channel sales can't be undone from Inventory.
 
 **Local dev auth bypass.**
 - `DEV_AUTH_EMAIL` (API, only when `NODE_ENV=development`) together with `VITE_DEV_AUTH=true` (web) skips Auth0.

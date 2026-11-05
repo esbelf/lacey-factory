@@ -41,6 +41,7 @@ beforeAll(async () => {
     },
     verifyPushToken: async (token) => token === "good-google-token",
     documentUrl: async (key) => `https://files.test/${key}`,
+    startAmazonSync: async () => "started",
   });
 });
 

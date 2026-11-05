@@ -2,9 +2,12 @@
 // Built from injected clients so tests can swap in fakes.
 import { createHash } from "node:crypto";
 
-import { ApplicationFailure } from "@temporalio/activity";
+import { ApplicationFailure, heartbeat } from "@temporalio/activity";
 import { eq } from "drizzle-orm";
 
+import type { OrderSource } from "../amazon/order-source";
+import { SpApiError } from "../amazon/sp-api";
+import { syncBegin, syncEnd, syncPage } from "../amazon/sync";
 import { emailAccounts, suppliers } from "../db/schema";
 import type { DB } from "../db/types";
 import {
@@ -14,6 +17,7 @@ import {
   saveExtraction,
   setDocumentStatus,
 } from "../domain/invoices";
+import { markSyncFailed } from "../domain/orders";
 import { getAccount, saveHistoryId as storeHistoryId, saveWatch } from "../email/account";
 import { type AttachmentRef, DOCUMENT_TYPES, type ParsedMessage, senderAddress } from "../email/gmail";
 import type { MailSource } from "../email/mail-source";
@@ -31,11 +35,13 @@ export interface ActivityDeps {
     put(key: string, body: Buffer, contentType: string): Promise<void>;
     get(key: string): Promise<Buffer>;
   };
+  /** Amazon orders; null when AMAZON_MODE=off. */
+  orders?: OrderSource | null;
 }
 
 export type SupplierRef = { id: string; name: string; kind: SupplierKind };
 
-export function createActivities({ db, mail, reader, store }: ActivityDeps) {
+export function createActivities({ db, mail, reader, store, orders = null }: ActivityDeps) {
   return {
     async getStoredHistoryId(email: string): Promise<string> {
       return (await getAccount(db, email))?.historyId ?? "0";
@@ -121,6 +127,32 @@ export function createActivities({ db, mail, reader, store }: ActivityDeps) {
     async renewWatch(email: string): Promise<void> {
       const w = await mail.renewWatch(email);
       await saveWatch(db, email, { expiresAt: new Date(w.expiresAt) });
+    },
+
+    // ── Amazon orders ──
+
+    async amazonSyncBegin(): Promise<string> {
+      return syncBegin(db);
+    },
+
+    async amazonSyncPage(since: string, nextToken: string | null) {
+      if (!orders) throw ApplicationFailure.nonRetryable("Amazon is off (AMAZON_MODE=off).", "AmazonOff");
+      heartbeat();
+      try {
+        return await syncPage(db, orders, since, nextToken);
+      } catch (err) {
+        // Bad keys or a bad request won't fix themselves; rate limits and outages will.
+        if (err instanceof SpApiError && !err.retryable) throw ApplicationFailure.nonRetryable(err.message, "AmazonError");
+        throw err;
+      }
+    },
+
+    async amazonSyncEnd(maxUpdated: string | null, count: number): Promise<void> {
+      await syncEnd(db, maxUpdated, count);
+    },
+
+    async amazonSyncFailed(message: string): Promise<void> {
+      await markSyncFailed(db, "amazon", message.slice(0, 1000));
     },
   };
 }

@@ -62,6 +62,8 @@ const reads = {
   suppliers: () => client.suppliers.$get(),
   steel: () => client.steel.$get(),
   sales: () => client.sales.$get(),
+  ordersStatus: () => client.orders.status.$get(),
+  channelSkus: () => client["channel-skus"].$get(),
 };
 
 export type Me = Data<typeof client.me.$get>;
@@ -72,6 +74,11 @@ export type Supplier = Data<typeof client.suppliers.$get>[number];
 export type SteelData = Data<typeof client.steel.$get>;
 export type Product = Data<typeof client.products.$get>[number];
 export type SaleRow = Data<typeof client.sales.$get>[number];
+export type OrdersPage = Data<typeof client.orders.$get>;
+export type OrderRow = OrdersPage["orders"][number];
+export type OrderDetail = Data<(typeof client.orders)[":id"]["$get"]>;
+export type OrdersStatus = Data<typeof client.orders.status.$get>;
+export type ChannelSkuRow = Data<(typeof client)["channel-skus"]["$get"]>[number];
 
 /** Short-lived link to view a stored supplier document. */
 export async function documentFileUrl(id: string): Promise<string> {
@@ -98,6 +105,27 @@ export function useRoll(id: string) {
   return useQuery<Roll, ApiError>({
     queryKey: ["roll", id],
     queryFn: async () => unwrap<Roll>(await client.rolls[":id"].$get({ param: { id } })),
+  });
+}
+
+export type OrderFilters = { marketplace?: string; status?: string; problems?: boolean; q?: string; before?: string };
+
+export function useOrders(f: OrderFilters) {
+  return useQuery<OrdersPage, ApiError>({
+    queryKey: ["orders", f],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      for (const [k, v] of Object.entries(f)) if (v) qs.set(k, v === true ? "1" : String(v));
+      return unwrap<OrdersPage>(await authFetch(`/api/orders?${qs}`));
+    },
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useOrder(id: string) {
+  return useQuery<OrderDetail, ApiError>({
+    queryKey: ["order", id],
+    queryFn: async () => unwrap<OrderDetail>(await client.orders[":id"].$get({ param: { id } })),
   });
 }
 

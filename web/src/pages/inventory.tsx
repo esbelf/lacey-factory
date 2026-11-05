@@ -1,6 +1,7 @@
 import { todayInMichigan } from "@lacey-factory/shared/feet";
 import { formatMoney, sumMoney } from "@lacey-factory/shared/money";
 import clsx from "clsx";
+import { Link } from "react-router";
 
 import { post, type Product, type SaleRow, type SteelData, useApi } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
@@ -215,8 +216,8 @@ function RecordSale({ products }: { products: Product[] }) {
   return (
     <Card title="Record a sale">
       <p className="mb-3 text-sm text-muted">
-        Takes the product&apos;s steel and fabric out of inventory. Shopify and Amazon orders will be recorded
-        automatically later; use this for anything else.
+        Takes the product&apos;s steel and fabric out of inventory. Amazon orders are recorded automatically
+        (see Orders); use this for sales anywhere else.
       </p>
       {sellable.length === 0 ? (
         <p className="text-muted">No products have a recipe yet. Set them up under Settings → Products.</p>
@@ -264,7 +265,7 @@ function RecentSales({ sales, canUndo }: { sales: SaleRow[]; canUndo: boolean })
         <p className="text-muted">None yet.</p>
       ) : (
         <ul className="divide-y divide-line">
-          {sales.map(({ sale, productName }) => (
+          {sales.map(({ sale, productName, order }) => (
             <li key={sale.id} className="flex flex-wrap items-center gap-3 py-2">
               <div className="min-w-0 flex-1">
                 <div className="font-medium">
@@ -273,11 +274,23 @@ function RecentSales({ sales, canUndo }: { sales: SaleRow[]; canUndo: boolean })
                 </div>
                 <div className="text-sm text-muted">
                   {formatDate(sale.soldOn)} · {SALE_SOURCE[sale.source]}
-                  {sale.externalRef && ` #${sale.externalRef}`}
-                  {sale.note && ` · ${sale.note}`}
+                  {order ? (
+                    <>
+                      {order.marketplace && ` ${order.marketplace}`} ·{" "}
+                      <Link to={`/orders/${order.orderId}`} className="font-semibold text-brand">
+                        order {order.externalId}
+                      </Link>
+                    </>
+                  ) : (
+                    <>
+                      {sale.externalRef && ` #${sale.externalRef}`}
+                      {sale.note && ` · ${sale.note}`}
+                    </>
+                  )}
                 </div>
               </div>
-              {canUndo && (
+              {/* Channel sales are undone by a cancel on the channel, not here. */}
+              {canUndo && sale.source === "manual" && (
                 <ActionForm action={post(`/api/sales/${sale.id}/void`)} confirm="Undo this sale? Its steel and fabric go back into inventory.">
                   <SubmitButton variant="ghost">Undo</SubmitButton>
                 </ActionForm>

@@ -3,6 +3,7 @@ import { formatFeet } from "@lacey-factory/shared/feet";
 import { patch, post, useApi } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { Loading } from "../components/loading";
+import { ChannelSkusCard } from "../components/channel-skus-card";
 import { ProductsCard, SteelItemsCard } from "../components/steel-cards";
 import { SuppliersCard } from "../components/suppliers-card";
 import { Card, Empty, Field, Input, PageHeader, Select } from "../components/ui";
@@ -16,6 +17,7 @@ export function SettingsPage() {
   const productsQ = useApi("products");
   const steelQ = useApi("steel");
   const can = useCan();
+  const skusQ = useApi("channelSkus", { enabled: can("orders") });
   if (!materialsQ.data || !sizesQ.data || !productsQ.data || !steelQ.data) {
     return <Loading error={materialsQ.error ?? sizesQ.error ?? productsQ.error ?? steelQ.error} />;
   }
@@ -167,6 +169,8 @@ export function SettingsPage() {
         <SteelItemsCard items={steelItems} />
 
         <SuppliersCard materials={materials} steelItems={steelItems} />
+
+        {skusQ.data && <ChannelSkusCard skus={skusQ.data} products={products} />}
 
         <Card title="LakeMat catalog">
           <p className="mb-3 text-base">
