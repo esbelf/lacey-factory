@@ -14,6 +14,7 @@ const LINKS: { href: string; label: string; need?: Permission }[] = [
   { href: "/summit", label: "Summit" },
   { href: "/inventory", label: "Inventory" },
   { href: "/orders", label: "Orders", need: "orders" },
+  { href: "/customers", label: "Customers", need: "orders" },
   { href: "/inbox", label: "Inbox", need: "invoices:review" },
   { href: "/settings", label: "Settings", need: "settings" },
   { href: "/users", label: "Users", need: "users" },

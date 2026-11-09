@@ -67,3 +67,23 @@ export function amazonConfig() {
     fakeDir: env("AMAZON_FAKE_DIR") ?? "tmp/fake-amazon",
   };
 }
+
+export type ShopifyMode = "off" | "fake" | "live";
+
+export function shopifyConfig() {
+  return {
+    /** off: webhooks rejected, no pulls. fake: JSON orders in SHOPIFY_FAKE_DIR. live: Admin API. */
+    mode: (env("SHOPIFY_MODE") ?? "off") as ShopifyMode,
+    /** The US store (also sells to Canada). */
+    shop: env("SHOPIFY_SHOP") ?? "lakemat-2.myshopify.com",
+    clientId: env("SHOPIFY_CLIENT_ID"),
+    /** Also the key Shopify signs webhooks with. */
+    clientSecret: env("SHOPIFY_CLIENT_SECRET"),
+    apiVersion: env("SHOPIFY_API_VERSION") ?? "2026-01",
+    /** Where Shopify sends order webhooks; the worker subscribes this URL. */
+    webhookUrl: env("SHOPIFY_WEBHOOK_URL"),
+    /** "Pull orders" with no date starts here the first time (default 30 days back). */
+    pullStart: env("SHOPIFY_PULL_START"),
+    fakeDir: env("SHOPIFY_FAKE_DIR") ?? "tmp/fake-shopify",
+  };
+}

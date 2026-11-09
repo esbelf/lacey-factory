@@ -518,7 +518,60 @@ export const steelUsage = pgTable(
   (t) => [index("steel_usage_item_idx").on(t.steelItemId), index("steel_usage_sale_idx").on(t.saleId)],
 );
 
-// ── Sales-channel orders (Amazon today; Shopify and others later) ──
+// ── Sales-channel orders (Amazon and Shopify) ──
+
+/**
+ * A person who bought from us. One row per customer however many orders they
+ * place: orders find their customer by channel customer id, then by email.
+ * Order count and spend are derived from `orders`.
+ */
+export const customers = pgTable(
+  "customers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** Lowercased and trimmed. */
+    email: text("email"),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    phone: text("phone"),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("customers_email_unique").on(t.email).where(sql`${t.email} is not null`)],
+);
+
+/** A channel's own id for a customer (Shopify customer GID) → our customer. */
+export const customerLinks = pgTable(
+  "customer_links",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    source: saleSource("source").notNull(),
+    externalId: text("external_id").notNull(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("customer_links_source_external_unique").on(t.source, t.externalId), index("customer_links_customer_idx").on(t.customerId)],
+);
+
+/** A postal address as the channel sent it (Shopify's field names). */
+export type Address = {
+  name: string | null;
+  company: string | null;
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  province: string | null;
+  provinceCode: string | null;
+  zip: string | null;
+  country: string | null;
+  countryCode: string | null;
+  phone: string | null;
+};
+
+/** One tax charged on an order, e.g. "MI State Tax" at 6%, or "HST" at 13%. */
+export type TaxLine = { title: string; rate: number | null; amount: number };
 
 export const orderItemState = pgEnum("order_item_state", [
   "waiting", // order not paid yet (Amazon "Pending"): nothing taken from stock
@@ -562,6 +615,22 @@ export const orders = pgTable(
     shipState: text("ship_state"),
     shipPostalCode: text("ship_postal_code"),
     shipCountry: text("ship_country"),
+    /** Who bought it (Shopify; Amazon doesn't share buyers). */
+    customerId: uuid("customer_id").references(() => customers.id),
+    email: text("email"),
+    phone: text("phone"),
+    /** The number the customer sees, e.g. Shopify's "#1001". */
+    orderName: text("order_name"),
+    canceledAt: timestamp("canceled_at", { withTimezone: true }),
+    fulfillmentStatus: text("fulfillment_status"),
+    /** Order money in its currency: items before discounts, discounts, shipping the customer paid, tax. */
+    subtotal: money("subtotal"),
+    discountTotal: money("discount_total"),
+    shippingCharged: money("shipping_charged"),
+    taxTotal: money("tax_total"),
+    taxLines: jsonb("tax_lines").$type<TaxLine[]>(),
+    shippingAddress: jsonb("shipping_address").$type<Address>(),
+    billingAddress: jsonb("billing_address").$type<Address>(),
     /** Everything the channel sent for the order. */
     raw: jsonb("raw").notNull(),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
@@ -570,6 +639,7 @@ export const orders = pgTable(
   (t) => [
     uniqueIndex("orders_source_external_unique").on(t.source, t.externalId),
     index("orders_purchased_idx").on(t.purchasedAt),
+    index("orders_customer_idx").on(t.customerId),
   ],
 );
 
@@ -631,4 +701,6 @@ export const channelSync = pgTable("channel_sync", {
   lastOkAt: timestamp("last_ok_at", { withTimezone: true }),
   lastError: text("last_error"),
   ordersSeen: integer("orders_seen").notNull().default(0),
+  /** Last webhook from the channel (Shopify). */
+  lastEventAt: timestamp("last_event_at", { withTimezone: true }),
 });

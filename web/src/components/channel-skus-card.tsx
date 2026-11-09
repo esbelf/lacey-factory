@@ -1,14 +1,14 @@
 import { type ChannelSkuRow, post, type Product } from "../api";
 import { ActionForm, SubmitButton } from "./action-form";
-import { SkuLinkForm } from "./orders-ui";
+import { CHANNEL_LABEL, SkuLinkForm } from "./orders-ui";
 import { Card, Empty } from "./ui";
 
-/** Settings → Amazon SKUs: which product each Amazon SKU is. */
+/** Settings → Channel SKUs: which product each Amazon or Shopify SKU is. */
 export function ChannelSkusCard({ skus, products }: { skus: ChannelSkuRow[]; products: Product[] }) {
   return (
-    <Card title="Amazon SKUs">
+    <Card title="Amazon and Shopify SKUs">
       <p className="mb-3 text-sm text-muted">
-        Which product each Amazon SKU is. Orders for a SKU that isn&apos;t linked wait under Orders → Needs attention.
+        Which product each Amazon or Shopify SKU is. Orders for a SKU that isn&apos;t linked wait under Orders → Needs attention.
         Linking the same SKU again changes it for new orders only.
       </p>
       {skus.length === 0 ? (
@@ -18,6 +18,7 @@ export function ChannelSkusCard({ skus, products }: { skus: ChannelSkuRow[]; pro
           {skus.map(({ sku, productName }) => (
             <li key={sku.id} className="flex flex-wrap items-center justify-between gap-3 py-2">
               <span>
+                <span className="mr-2 rounded bg-line px-1.5 py-0.5 text-xs font-semibold">{CHANNEL_LABEL[sku.source] ?? sku.source}</span>
                 <span className="font-semibold">{sku.sku}</span> →{" "}
                 {sku.productId ? (
                   <>

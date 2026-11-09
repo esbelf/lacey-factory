@@ -29,6 +29,8 @@ beforeAll(async () => {
     verifyPushToken: async () => false,
     documentUrl: async (key) => `https://files.test/${key}`,
     startAmazonSync: async () => "started",
+    notifyShopifyOrder: async () => {},
+    startShopifyPull: async () => "started",
     authenticate: async (req) => {
       const email = req.headers.get("x-test-email");
       if (!email) return null;

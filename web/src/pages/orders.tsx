@@ -1,20 +1,33 @@
 import { formatMoney } from "@lacey-factory/shared/money";
+import type { ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { type OrderFilters, type OrdersStatus, post, type Product, useApi, useOrders } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { Loading } from "../components/loading";
-import { formatDateTime, formatPrice, ItemStateBadge, MARKET_LABEL, SkuLinkForm } from "../components/orders-ui";
+import {
+  CHANNEL_LABEL,
+  formatDateTime,
+  formatPrice,
+  ItemStateBadge,
+  MARKET_LABEL,
+  shipToShort,
+  SkuLinkForm,
+} from "../components/orders-ui";
 import { Card, Empty, Field, Input, PageHeader, Select, Table } from "../components/ui";
 import { useTitle } from "../title";
 
-const STATUSES = ["Pending", "Unshipped", "PartiallyShipped", "Shipped", "Canceled", "Unfulfillable"];
-const MODE_LABEL = { off: "Off", fake: "Fake orders", sandbox: "Amazon sandbox", live: "Live" } as const;
+const STATUSES: Record<string, string[]> = {
+  amazon: ["Pending", "Unshipped", "PartiallyShipped", "Shipped", "Canceled", "Unfulfillable"],
+  shopify: ["PAID", "PARTIALLY_PAID", "PARTIALLY_REFUNDED", "REFUNDED", "VOIDED"],
+};
+const MODE_LABEL: Record<string, string> = { off: "Off", fake: "Fake orders", sandbox: "Sandbox", live: "Live" };
 
 export function OrdersPage() {
   useTitle("Orders");
   const [params, setParams] = useSearchParams();
   const filters: OrderFilters = {
+    source: params.get("source") ?? undefined,
     marketplace: params.get("marketplace") ?? undefined,
     status: params.get("status") ?? undefined,
     problems: params.get("problems") === "1",
@@ -30,24 +43,29 @@ export function OrdersPage() {
     if (value) next.set(name, value);
     else next.delete(name);
     next.delete("before");
+    if (name === "source") next.delete("status");
     setParams(next, { replace: true });
   }
+  const statuses = filters.source ? STATUSES[filters.source] : [...STATUSES.amazon, ...STATUSES.shopify];
 
   return (
     <>
       <PageHeader
         title="Orders"
-        subtitle="Amazon US and Canada. A paid order takes its steel, fabric and box out of inventory; a cancel puts them back."
+        subtitle="Amazon (US and Canada) and the Shopify store. A paid order takes its steel, fabric and box out of inventory; a cancel or refund puts them back."
         action={
-          status && status.mode !== "off" ? (
-            <ActionForm action={post("/api/orders/sync")}>
-              <SubmitButton variant="secondary">Sync now</SubmitButton>
-            </ActionForm>
-          ) : undefined
+          <Link to="/customers" className="font-semibold text-brand">
+            Customers →
+          </Link>
         }
       />
       <div className="flex flex-col gap-4">
-        {status && <SyncStatus status={status} />}
+        {status && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <AmazonStatus status={status.amazon} />
+            <ShopifyStatus status={status.shopify} />
+          </div>
+        )}
         {status && products && <NeedsAttention status={status} products={products} />}
 
         <Card>
@@ -58,6 +76,13 @@ export function OrdersPage() {
               setFilter("q", String(new FormData(e.currentTarget).get("q") ?? "").trim());
             }}
           >
+            <Field label="Channel">
+              <Select value={filters.source ?? ""} onChange={(e) => setFilter("source", e.target.value)} className="w-36">
+                <option value="">All</option>
+                <option value="amazon">Amazon</option>
+                <option value="shopify">Shopify</option>
+              </Select>
+            </Field>
             <Field label="Market">
               <Select value={filters.marketplace ?? ""} onChange={(e) => setFilter("marketplace", e.target.value)} className="w-36">
                 <option value="">All</option>
@@ -65,10 +90,10 @@ export function OrdersPage() {
                 <option value="CA">Canada</option>
               </Select>
             </Field>
-            <Field label="Amazon status">
-              <Select value={filters.status ?? ""} onChange={(e) => setFilter("status", e.target.value)} className="w-44">
+            <Field label="Status">
+              <Select value={filters.status ?? ""} onChange={(e) => setFilter("status", e.target.value)} className="w-48">
                 <option value="">Any</option>
-                {STATUSES.map((s) => (
+                {statuses.map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>
@@ -76,7 +101,7 @@ export function OrdersPage() {
               </Select>
             </Field>
             <Field label="Search">
-              <Input name="q" defaultValue={filters.q} placeholder="Order # or SKU" className="w-52" />
+              <Input name="q" defaultValue={filters.q} placeholder="Order #, SKU, name or email" className="w-60" />
             </Field>
             <label className="flex h-11 items-center gap-2">
               <input
@@ -93,7 +118,11 @@ export function OrdersPage() {
           {!data ? (
             <Loading error={error} />
           ) : data.orders.length === 0 ? (
-            <Empty>{status?.mode === "off" ? "Amazon isn't connected yet (AMAZON_MODE=off)." : "No orders match."}</Empty>
+            <Empty>
+              {status?.amazon.mode === "off" && status.shopify.mode === "off"
+                ? "No channel is connected yet (AMAZON_MODE and SHOPIFY_MODE are off)."
+                : "No orders match."}
+            </Empty>
           ) : (
             <OrdersTable orders={data.orders} />
           )}
@@ -128,21 +157,64 @@ export function OrdersPage() {
   );
 }
 
-function SyncStatus({ status }: { status: OrdersStatus }) {
+function ChannelCard({ title, mode, children }: { title: string; mode: string; children: ReactNode }) {
+  return (
+    <Card>
+      <div className="mb-2 flex items-center gap-2">
+        <h2 className="text-lg font-bold">{title}</h2>
+        <span className="rounded bg-line px-2 py-0.5 text-xs font-semibold">{MODE_LABEL[mode] ?? mode}</span>
+      </div>
+      <div className="flex flex-col gap-1 text-sm text-muted">{children}</div>
+    </Card>
+  );
+}
+
+function AmazonStatus({ status }: { status: OrdersStatus["amazon"] }) {
   const { mode, sync } = status;
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted">
-      <span className="rounded bg-line px-2 py-0.5 font-semibold text-ink">{MODE_LABEL[mode]}</span>
+    <ChannelCard title="Amazon" mode={mode}>
       {mode === "off" ? (
         <span>Set AMAZON_MODE in .env to start syncing.</span>
       ) : (
         <>
-          <span>Last synced {sync?.lastOkAt ? formatDateTime(sync.lastOkAt) : "never"}</span>
-          {sync?.cursor && <span>· orders updated up to {formatDateTime(sync.cursor)}</span>}
+          <span>
+            Checked every 15 minutes. Last synced {sync?.lastOkAt ? formatDateTime(sync.lastOkAt) : "never"}
+            {sync?.cursor && <> · orders updated up to {formatDateTime(sync.cursor)}</>}
+          </span>
+          <ActionForm action={post("/api/orders/sync")} className="mt-2">
+            <input type="hidden" name="source" value="amazon" />
+            <SubmitButton variant="secondary">Sync now</SubmitButton>
+          </ActionForm>
         </>
       )}
-      {sync?.lastError && <span className="w-full font-semibold text-danger">Last sync failed: {sync.lastError}</span>}
-    </div>
+      {sync?.lastError && <span className="font-semibold text-danger">Last sync failed: {sync.lastError}</span>}
+    </ChannelCard>
+  );
+}
+
+function ShopifyStatus({ status }: { status: OrdersStatus["shopify"] }) {
+  const { mode, sync, shop } = status;
+  return (
+    <ChannelCard title="Shopify" mode={mode}>
+      {mode === "off" ? (
+        <span>Set SHOPIFY_MODE in .env to receive orders.</span>
+      ) : (
+        <>
+          <span>
+            {shop} sends each paid order as it happens. Last webhook {sync?.lastEventAt ? formatDateTime(sync.lastEventAt) : "never"}
+            {sync?.cursor && <> · last pull up to {formatDateTime(sync.cursor)}</>}
+          </span>
+          <ActionForm action={post("/api/orders/sync")} className="mt-2 flex flex-wrap items-end gap-2">
+            <input type="hidden" name="source" value="shopify" />
+            <Field label="Since" hint={sync?.cursor ? "Empty: since the last pull" : "Empty: the last 30 days"}>
+              <Input name="since" type="date" className="w-44" />
+            </Field>
+            <SubmitButton variant="secondary">Pull orders</SubmitButton>
+          </ActionForm>
+        </>
+      )}
+      {sync?.lastError && <span className="font-semibold text-danger">Last problem: {sync.lastError}</span>}
+    </ChannelCard>
   );
 }
 
@@ -154,18 +226,20 @@ function NeedsAttention({ status, products }: { status: OrdersStatus; products: 
       {unmapped.length > 0 && (
         <>
           <p className="mb-3 text-sm text-muted">
-            These Amazon SKUs aren&apos;t linked to a product, so their orders haven&apos;t taken anything from stock yet.
+            These SKUs aren&apos;t linked to a product, so their orders haven&apos;t taken anything from stock yet.
           </p>
           <ul className="divide-y divide-line">
             {unmapped.map((u) => (
-              <li key={u.sku ?? "none"} className="flex flex-wrap items-end justify-between gap-3 py-3">
+              <li key={`${u.source}:${u.sku ?? "none"}`} className="flex flex-wrap items-end justify-between gap-3 py-3">
                 <div className="min-w-0">
-                  <div className="font-semibold">{u.sku ?? "(no SKU)"}</div>
+                  <div className="font-semibold">
+                    {u.sku ?? "(no SKU)"} <span className="text-sm font-normal text-muted">{CHANNEL_LABEL[u.source] ?? u.source}</span>
+                  </div>
                   <div className="text-sm text-muted">
                     {u.title ?? "—"} · {u.orders} order{u.orders === 1 ? "" : "s"}
                   </div>
                 </div>
-                {u.sku && <SkuLinkForm products={products} sku={u.sku} compact />}
+                {u.sku && <SkuLinkForm products={products} sku={u.sku} source={u.source} compact />}
               </li>
             ))}
           </ul>
@@ -198,7 +272,8 @@ function OrdersTable({ orders }: { orders: NonNullable<ReturnType<typeof useOrde
         <tr>
           <th>Ordered</th>
           <th>Order</th>
-          <th>Market</th>
+          <th>Customer</th>
+          <th>Ship to</th>
           <th>Status</th>
           <th>Items</th>
           <th className="text-right">Total</th>
@@ -210,11 +285,27 @@ function OrdersTable({ orders }: { orders: NonNullable<ReturnType<typeof useOrde
             <td className="whitespace-nowrap">{formatDateTime(o.purchasedAt)}</td>
             <td className="whitespace-nowrap">
               <Link to={`/orders/${o.id}`} className="font-semibold text-brand">
-                {o.externalId}
+                {o.orderName ?? o.externalId}
               </Link>
+              <div className="text-sm text-muted">
+                {CHANNEL_LABEL[o.source] ?? o.source}
+                {o.source === "amazon" && o.marketplace && <> · {MARKET_LABEL[o.marketplace] ?? o.marketplace}</>}
+              </div>
             </td>
-            <td className="whitespace-nowrap">{MARKET_LABEL[o.marketplace ?? ""] ?? o.marketplace ?? "—"}</td>
-            <td>{o.status}</td>
+            <td>
+              {o.customerId ? (
+                <Link to={`/customers/${o.customerId}`} className="text-brand">
+                  {o.customerName ?? o.email ?? "Customer"}
+                </Link>
+              ) : (
+                <span className="text-muted">—</span>
+              )}
+            </td>
+            <td className="whitespace-nowrap">{shipToShort(o)}</td>
+            <td>
+              {o.status}
+              {o.canceledAt && <div className="text-sm font-semibold text-danger">Canceled</div>}
+            </td>
             <td>
               <ul className="flex flex-col gap-1">
                 {o.items.map((i) => (
@@ -234,7 +325,10 @@ function OrdersTable({ orders }: { orders: NonNullable<ReturnType<typeof useOrde
                 ))}
               </ul>
             </td>
-            <td className="text-right whitespace-nowrap">{formatPrice(o.orderTotal, o.currency)}</td>
+            <td className="text-right whitespace-nowrap">
+              {formatPrice(o.orderTotal, o.currency)}
+              {o.taxTotal != null && o.taxTotal > 0 && <div className="text-sm text-muted">tax {formatPrice(o.taxTotal, o.currency)}</div>}
+            </td>
           </tr>
         ))}
       </tbody>

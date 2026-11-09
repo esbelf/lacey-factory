@@ -6,9 +6,10 @@ import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
 import type { Authenticate } from "./auth";
-import { amazonConfig, emailConfig } from "./config";
+import { amazonConfig, emailConfig, shopifyConfig } from "./config";
 import type { DB } from "./db/types";
 import { loadCatalog } from "./domain/catalog";
+import * as cust from "./domain/customers";
 import { UserError } from "./domain/errors";
 import * as inv from "./domain/invoices";
 import * as ord from "./domain/orders";
@@ -18,6 +19,7 @@ import * as svc from "./domain/services";
 import * as steel from "./domain/steel";
 import { type AppUser, ensureUser, listUsers, setUserRole } from "./domain/users";
 import * as mailbox from "./email/account";
+import { ORDER_TOPICS, parseOrderWebhook, verifyShopifyHmac } from "./shopify/webhook";
 import type { GmailNotification } from "./temporal/names";
 
 type Env = { Variables: { user: AppUser; db: DB } };
@@ -67,10 +69,16 @@ export type AppDeps = {
   documentUrl: (key: string) => Promise<string>;
   /** Start an Amazon order sync now (Temporal). */
   startAmazonSync: () => Promise<"started" | "running">;
+  /** A Shopify order webhook arrived: fetch and save that order (Temporal). */
+  notifyShopifyOrder: (orderGid: string, webhookId: string) => Promise<void>;
+  /** "Pull orders": read Shopify orders updated since a date, or since the last pull. */
+  startShopifyPull: (since: string | null) => Promise<"started" | "running">;
 };
 
-/** Routes that skip the app login: browser redirect from Google, and Pub/Sub pushes. */
-const PUBLIC_PATHS = new Set(["/api/health", "/api/email/callback", "/api/webhooks/gmail"]);
+/** Routes that skip the app login: browser redirect from Google, Pub/Sub pushes and Shopify webhooks (signed). */
+const PUBLIC_PATHS = new Set(["/api/health", "/api/email/callback", "/api/webhooks/gmail", "/api/webhooks/shopify"]);
+
+const saleSource = z.enum(["amazon", "shopify"], { message: "Pick Amazon or Shopify." });
 
 const reviewLines = z.preprocess(
   (v) => (typeof v === "string" ? JSON.parse(v || "[]") : v),
@@ -147,6 +155,27 @@ export function createApp(deps: AppDeps) {
     if (!body.message?.data) return c.json({ error: "Bad request" }, 400);
     await handleNotification(deps, decodePubSubData(body.message.data));
     return c.body(null, 204);
+  });
+
+  // Shopify order webhooks, signed with the app's client secret. Reply fast
+  // (Shopify waits 5 s); the order is fetched and saved by a Temporal workflow.
+  // A non-2xx response makes Shopify retry.
+  app.post("/webhooks/shopify", async (c) => {
+    const cfg = shopifyConfig();
+    if (cfg.mode === "off") return c.json({ error: "Shopify is off." }, 404);
+    const raw = await c.req.text();
+    if (!cfg.clientSecret || !verifyShopifyHmac(raw, c.req.header("x-shopify-hmac-sha256"), cfg.clientSecret)) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    if (c.req.header("x-shopify-shop-domain") !== cfg.shop) return c.json({ error: "Unknown shop" }, 401);
+    const topic = c.req.header("x-shopify-topic") ?? "";
+    if (!ORDER_TOPICS.has(topic)) return c.body(null, 200);
+    const hook = parseOrderWebhook((name) => c.req.header(name), raw);
+    if (!hook) return c.json({ error: "No order id" }, 400);
+    const db = deps.getDb();
+    await ord.markEventReceived(db, "shopify");
+    await deps.notifyShopifyOrder(hook.orderGid, hook.webhookId);
+    return c.body(null, 200);
   });
 
   // Everything below needs a signed-in, allowed user.
@@ -406,11 +435,13 @@ export function createApp(deps: AppDeps) {
       return ok(c, "Sale undone.");
     })
 
-    // ── Channel orders (Amazon) ──
+    // ── Channel orders (Amazon, Shopify) ──
     .get("/orders", need("orders"), async (c) => {
       const f = c.req.query();
       return c.json(
         await ord.listOrders(c.var.db, {
+          source: saleSource.safeParse(f.source).data,
+          customerId: id.safeParse(f.customerId).data,
           marketplace: f.marketplace || undefined,
           status: f.status || undefined,
           problemsOnly: f.problems === "1",
@@ -420,8 +451,16 @@ export function createApp(deps: AppDeps) {
       );
     })
     .get("/orders/status", need("orders"), async (c) => {
-      const [sync, problems] = await Promise.all([ord.syncState(c.var.db, "amazon"), ord.orderProblems(c.var.db)]);
-      return c.json({ mode: amazonConfig().mode, sync, problems });
+      const [amazon, shopify, problems] = await Promise.all([
+        ord.syncState(c.var.db, "amazon"),
+        ord.syncState(c.var.db, "shopify"),
+        ord.orderProblems(c.var.db),
+      ]);
+      return c.json({
+        amazon: { mode: amazonConfig().mode, sync: amazon },
+        shopify: { mode: shopifyConfig().mode, sync: shopify, shop: shopifyConfig().shop },
+        problems,
+      });
     })
     .get("/orders/:id", need("orders"), async (c) => {
       const order = await ord.getOrder(c.var.db, param(c, "id"));
@@ -429,15 +468,34 @@ export function createApp(deps: AppDeps) {
       return c.json(order);
     })
     .post("/orders/sync", need("orders"), async (c) => {
+      const i = await input(
+        c,
+        z.object({
+          source: z.preprocess((v) => v ?? "amazon", saleSource),
+          since: z.preprocess((v) => (v === "" || v == null ? null : v), isoDate.nullable()),
+        }),
+      );
+      if (i.source === "shopify") {
+        if (shopifyConfig().mode === "off") throw new UserError("Shopify is off. Set SHOPIFY_MODE in .env.");
+        const r = await deps.startShopifyPull(i.since);
+        return ok(c, r === "running" ? "A pull is already running." : "Pulling Shopify orders… refresh in a moment.");
+      }
       if (amazonConfig().mode === "off") throw new UserError("Amazon is off. Set AMAZON_MODE in .env.");
       const r = await deps.startAmazonSync();
       return ok(c, r === "running" ? "A sync is already running." : "Syncing Amazon orders… refresh in a moment.");
+    })
+    .get("/customers", need("orders"), async (c) => c.json(await cust.listCustomers(c.var.db, { q: c.req.query("q") })))
+    .get("/customers/:id", need("orders"), async (c) => {
+      const customer = await cust.getCustomer(c.var.db, param(c, "id"));
+      if (!customer) throw new HTTPException(404, { message: "Customer not found." });
+      return c.json(customer);
     })
     .get("/channel-skus", need("orders"), async (c) => c.json(await ord.listChannelSkus(c.var.db)))
     .post("/channel-skus", need("orders"), async (c) => {
       const i = await input(
         c,
         z.object({
+          source: z.preprocess((v) => v || "amazon", saleSource),
           sku: z.string().trim().min(1, "Enter the SKU."),
           // "" or "ignore" = not a factory product
           productId: z.preprocess((v) => (v === "" || v === "ignore" ? null : v), z.string().uuid("Pick a product.").nullable()),
@@ -445,7 +503,7 @@ export function createApp(deps: AppDeps) {
           note: text,
         }),
       );
-      const retried = await ord.mapSku(c.var.db, c.var.user.email, { source: "amazon", ...i });
+      const retried = await ord.mapSku(c.var.db, c.var.user.email, i);
       const what = i.productId ? `Linked ${i.sku}.` : `${i.sku} marked as not a factory product.`;
       return ok(c, retried ? `${what} Updated ${retried} waiting order${retried === 1 ? "" : "s"}.` : what);
     })

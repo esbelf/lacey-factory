@@ -20,11 +20,13 @@ import { fakeOrder } from "../src/amazon/fake-orders";
 import { FakeOrderSource, type OrderSource } from "../src/amazon/order-source";
 import { saveSupplier } from "../src/domain/invoices";
 import { mapSku } from "../src/domain/orders";
+import { fakeShopifyOrder, SAMPLE_CUSTOMERS } from "../src/shopify/fake-orders";
+import { FakeShopifySource, type ShopifySource } from "../src/shopify/order-source";
 import { addSupplierSteelProduct, createSteelItem } from "../src/domain/steel";
 import { FakeMailSource, type FakeEmail } from "../src/email/mail-source";
 import { createActivities } from "../src/temporal/activities";
 import type { DocumentReader } from "../src/temporal/extract";
-import { mailboxWorkflowId, SIGNALS, WORKFLOWS } from "../src/temporal/names";
+import { mailboxWorkflowId, shopifyOrderWorkflowId, SIGNALS, WORKFLOWS } from "../src/temporal/names";
 import { hanesPackingList } from "./fixtures/hanes-extraction";
 import { steelInvoice } from "./fixtures/steel-extraction";
 
@@ -70,7 +72,7 @@ afterAll(async () => {
   await env?.teardown();
 });
 
-async function withWorker<T>(fn: () => Promise<T>, orders: OrderSource | null = null): Promise<T> {
+async function withWorker<T>(fn: () => Promise<T>, orders: OrderSource | null = null, shopify: ShopifySource | null = null): Promise<T> {
   const worker = await Worker.create({
     connection: env.nativeConnection,
     bundlerOptions: { webpackConfigHook: (c) => ({ ...c, stats: "errors-only", infrastructureLogging: { level: "error" } }) },
@@ -85,6 +87,7 @@ async function withWorker<T>(fn: () => Promise<T>, orders: OrderSource | null = 
         get: async (key) => stored.get(key)!,
       },
       orders,
+      shopify,
     }),
   });
   return worker.runUntil(fn);
@@ -248,5 +251,60 @@ describe("Amazon order sync", () => {
     }, broken);
     const [sync] = await db.select().from(schema.channelSync);
     expect(sync.lastError).toMatch(/bad refresh token/);
+  }, 120_000);
+});
+
+describe("Shopify orders", () => {
+  it("a webhook run saves the order; the same delivery again doesn't run twice; a pull brings in the rest", async () => {
+    const dir = path.join(inbox, "..", "shopify");
+    await mkdir(dir, { recursive: true });
+    const [product] = await db.select().from(schema.products).where(eq(schema.products.name, "Boatlift Mat Large"));
+    await mapSku(db, ACCOUNT, { source: "shopify", sku: "BL-L", productId: product.id, qtyPerUnit: 1 });
+    const now = Date.now();
+    const orders = [0, 1].map((n) =>
+      fakeShopifyOrder({
+        id: 900 + n,
+        number: 9000 + n,
+        region: "MI",
+        customer: SAMPLE_CUSTOMERS.pat,
+        createdAt: new Date(now - (30 - n * 10) * 60_000).toISOString(),
+        items: [{ sku: "BL-L", qty: 1, price: 299 }],
+      }),
+    );
+    for (const o of orders) await writeFile(path.join(dir, `${o.id.split("/").pop()}.json`), JSON.stringify(o));
+    const source = new FakeShopifySource(dir);
+
+    await withWorker(
+      async () => {
+        const workflowId = shopifyOrderWorkflowId(orders[0].id, "wh-1");
+        const r = await env.client.workflow.execute(WORKFLOWS.shopifyOrder, { workflowId, taskQueue: "test", args: [{ orderGid: orders[0].id }] });
+        expect(r).toBe("saved");
+        await expect(
+          env.client.workflow.start(WORKFLOWS.shopifyOrder, {
+            workflowId,
+            taskQueue: "test",
+            args: [{ orderGid: orders[0].id }],
+            workflowIdReusePolicy: "REJECT_DUPLICATE",
+          }),
+        ).rejects.toThrow();
+
+        const pulled = await env.client.workflow.execute(WORKFLOWS.shopifyPull, {
+          workflowId: "shopify-pull-1",
+          taskQueue: "test",
+          args: [{ since: new Date(now - 3600_000).toISOString() }],
+        });
+        expect(pulled).toEqual({ orders: 2, saved: 1 });
+      },
+      null,
+      source,
+    );
+
+    const saved = await db.select().from(schema.orders).where(eq(schema.orders.source, "shopify"));
+    expect(saved.map((o) => o.orderName).sort()).toEqual(["#9000", "#9001"]);
+    expect(new Set(saved.map((o) => o.customerId)).size).toBe(1);
+    const sales = await db.select().from(schema.sales).where(eq(schema.sales.source, "shopify"));
+    expect(sales).toHaveLength(2);
+    const [sync] = await db.select().from(schema.channelSync).where(eq(schema.channelSync.source, "shopify"));
+    expect(sync).toMatchObject({ lastError: null, ordersSeen: 2 });
   }, 120_000);
 });

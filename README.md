@@ -2,8 +2,8 @@
 
 Internal app that tracks production: **roll received → cut → sewn (in-house or Summit) → inventory**.
 Replaces Katana MRP for inventory. Also tracks steel poles (bought by emailed invoice, costed FIFO with freight) and
-product sales, which take out each product's steel and fabric. Sales are entered by hand for now; Shopify, Amazon and
-other channels will call the same `recordSale` later.
+product sales, which take out each product's steel and fabric. Sales come from Amazon and Shopify orders, or are
+entered by hand; every channel calls the same `recordSale`.
 
 Stack: React + Vite (S3 + CloudFront) · Hono API (AWS Lambda) · Temporal worker (ECS Fargate + Temporal Cloud) · Postgres + Drizzle (Neon in production, Docker locally) · Auth0.
 
@@ -24,6 +24,8 @@ Gmail (eric@) ─watch─> Pub/Sub ─push─> /api/webhooks/gmail ─signal─>
 - **Supplier invoices** (`/inbox`): when an email from a known supplier arrives at eric@lakemat.com, each PDF/photo attachment is saved to S3 and read by Claude. If every line maps to a supplier product (Settings → **Suppliers**, e.g. Hanes `38151` = TerraTex N06 12.5′×360′), the rolls are registered automatically — one per ticket number, dated by ship date, else document date, else the email's day. Anything unclear (unknown product, unreadable, size mismatch) waits in the Inbox with the lines pre-filled for a regular worker or the admin to fix and register. The same invoice number is never registered twice. The admin connects the mailbox with the **Connect Email** button in the header.
 - **Boxes**: every product ships in one shipping box (Settings → Products → *Ships in*). Boxes are stocked like steel, at FIFO cost (Inventory → Shipping boxes, *Adjust steel & boxes*), and a sale takes one box per product, recording its box cost next to its steel cost. The catalog loads the 12 standard boxes with their sizes, plus each product's own SKU and packed weight.
 - **Orders** (`/orders`): Amazon orders from the US and Canada, polled every 15 minutes. A paid order (Amazon status Unshipped or later) records a sale for each line, which takes the product's steel and fabric out of inventory; `Pending` orders wait; a cancel undoes the sale. Each Amazon SKU is linked to a product under Settings → **Amazon SKUs** (with "per unit" for multi-packs). Orders with an unknown SKU, or a product without a recipe, show under **Needs attention** and are recorded once fixed. Every field Amazon sends is kept and shown on the order page; amounts stay in the order's currency (CAD for Canada).
+- **Shopify orders** (also `/orders`): the US store (`lakemat-2.myshopify.com`, which also sells to Canada) sends each order by webhook as it's paid, updated or canceled. Only paid orders are saved; a refund or cancel undoes the sale. Each order keeps the customer, shipping and billing addresses, items, discounts, the shipping the customer paid, and every tax line (Michigan sales tax, GST/HST/PST). **Pull orders** reads everything since a date, for the first import or after an outage. Shopify SKUs are linked the same way as Amazon's. The real shipping cost will come from ShipStation later.
+- **Customers** (`/customers`): everyone who ordered from Shopify, with their orders, first and last order date, and total spent. A repeat buyer is one customer: orders match by Shopify customer id, then by email (any capitals, guest checkouts included).
 - **Catalog** (Settings → *Load LakeMat catalog*): adds TerraTex N06, TerraGrid RX1100, TerraTex HD NTPEP, TerraTex HPG-57, their cut sizes, which pieces each product uses, and Hanes Geo Components as a roll supplier (`api/src/db/catalog.ts`; add Hanes's sender addresses under Suppliers). Only adds what's missing. Sizes arrive **switched off** at their finished length; enter the real cut length (with hem allowance) and turn each one on before cutting.
 
 ## Users and roles
@@ -32,7 +34,7 @@ Gmail (eric@) ─watch─> Pub/Sub ─push─> /api/webhooks/gmail ─signal─>
 | Register rolls, record cuts, mark sewn, Summit send/receive, view everything | ✓ | ✓ | ✓ |
 | Settings (materials, sizes, catalog, suppliers), adjust inventory, close/reopen rolls, undo | | ✓ | ✓ |
 | **Inbox**: review supplier invoices and register their rolls | | ✓ | ✓ |
-| **Orders**: Amazon orders, link SKUs to products, Sync now | | ✓ | ✓ |
+| **Orders** and **Customers**: Amazon and Shopify orders, customers, link SKUs to products, Sync now / Pull orders | | ✓ | ✓ |
 | **Users** dashboard (change roles), **Connect Email** | | | ✓ |
 
 - Everyone who passes the sign-in rule gets a user record the first time they sign in, **always as a factory worker**. The admin promotes people on the **Users** page.
@@ -60,6 +62,20 @@ docker compose exec api npm run simulate:amazon -- us        # paid US order; al
 docker compose exec api npm run simulate:amazon -- cancel    # the last order is canceled (also: pay, ship)
 ```
 Each command starts a sync; watch it in the Temporal UI and on the Orders page. With real keys, `AMAZON_MODE=sandbox` syncs Amazon's sample order and `live` reads real orders (read-only).
+
+Try Shopify orders without Shopify: set `SHOPIFY_MODE=fake` and any `SHOPIFY_CLIENT_SECRET` in `.env`, restart, link `LM-XL` (channel Shopify) under Settings, then:
+```bash
+docker compose exec api npm run simulate:shopify -- repeat   # Pat orders twice: one customer, two orders
+docker compose exec api npm run simulate:shopify -- on       # Ontario order with 13% HST; also: mi, oh, bc, guest, pending, unknown-sku
+docker compose exec api npm run simulate:shopify -- refund   # the last order is refunded (also: pay, cancel)
+```
+Each command writes the order and sends the signed webhook Shopify would send, so it shows up on the Orders page without clicking anything.
+
+Going live with Shopify:
+1. In the Shopify Dev Dashboard app for the US store, add the scopes `read_orders`, `read_customers` and `read_all_orders`. Request **protected customer data** access for name, email, phone and address; without it those fields come back empty.
+2. Set `SHOPIFY_MODE=live`, `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET` and `SHOPIFY_WEBHOOK_URL=https://factory.lakemat.com/api/webhooks/shopify` for both the Lambda and the worker.
+3. Restart the worker: it subscribes the webhooks (and puts back any Shopify dropped).
+4. Click **Pull orders** with a start date to import past orders.
 
 Containers reinstall dependencies on start when `package-lock.json` changed (`scripts/dev-entrypoint.sh`), so a plain `docker compose up --build` picks up new packages.
 

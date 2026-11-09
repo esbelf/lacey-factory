@@ -79,6 +79,8 @@ export type OrderRow = OrdersPage["orders"][number];
 export type OrderDetail = Data<(typeof client.orders)[":id"]["$get"]>;
 export type OrdersStatus = Data<typeof client.orders.status.$get>;
 export type ChannelSkuRow = Data<(typeof client)["channel-skus"]["$get"]>[number];
+export type CustomerRow = Data<typeof client.customers.$get>[number];
+export type CustomerDetail = Data<(typeof client.customers)[":id"]["$get"]>;
 
 /** Short-lived link to view a stored supplier document. */
 export async function documentFileUrl(id: string): Promise<string> {
@@ -108,7 +110,15 @@ export function useRoll(id: string) {
   });
 }
 
-export type OrderFilters = { marketplace?: string; status?: string; problems?: boolean; q?: string; before?: string };
+export type OrderFilters = {
+  source?: string;
+  customerId?: string;
+  marketplace?: string;
+  status?: string;
+  problems?: boolean;
+  q?: string;
+  before?: string;
+};
 
 export function useOrders(f: OrderFilters) {
   return useQuery<OrdersPage, ApiError>({
@@ -119,6 +129,21 @@ export function useOrders(f: OrderFilters) {
       return unwrap<OrdersPage>(await authFetch(`/api/orders?${qs}`));
     },
     placeholderData: (prev) => prev,
+  });
+}
+
+export function useCustomers(q: string) {
+  return useQuery<CustomerRow[], ApiError>({
+    queryKey: ["customers", q],
+    queryFn: async () => unwrap<CustomerRow[]>(await client.customers.$get({ query: { q } })),
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useCustomer(id: string) {
+  return useQuery<CustomerDetail, ApiError>({
+    queryKey: ["customer", id],
+    queryFn: async () => unwrap<CustomerDetail>(await client.customers[":id"].$get({ param: { id } })),
   });
 }
 

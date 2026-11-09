@@ -16,6 +16,7 @@
     "worker:dev": "tsx watch --include src/temporal src/worker.ts",
     "simulate": "tsx scripts/simulate.ts",
     "simulate:amazon": "tsx scripts/simulate-amazon.ts",
+    "simulate:shopify": "tsx scripts/simulate-shopify.ts",
     "read-document": "tsx scripts/read-document.ts"
   },
   "dependencies": {

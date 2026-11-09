@@ -50,6 +50,13 @@
       "when": 1793886258347,
       "tag": "0006_boxes",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793904250640,
+      "tag": "0007_shopify_customers",
+      "breakpoints": true
     }
   ]
 }

@@ -1,12 +1,12 @@
-// Sales-channel orders (Amazon today). Orders are saved as the channel sent
+// Sales-channel orders (Amazon and Shopify). Orders are saved as the channel sent
 // them; applyOrder then turns each paid line into a sale through recordSale,
 // and a cancel undoes it. Everything here is safe to run again.
 import { todayInMichigan } from "@lacey-factory/shared/feet";
 import { and, desc, eq, ilike, inArray, lt, or, sql } from "drizzle-orm";
 
-import { channelSkus, channelSync, orderItems, orders, products, sales } from "../db/schema";
+import { channelSkus, channelSync, customers, orderItems, orders, products, sales } from "../db/schema";
 import type { DB } from "../db/types";
-import type { NormalizedOrder } from "../amazon/normalize";
+import { type CustomerInput, matchCustomer } from "./customers";
 import { UserError } from "./errors";
 import { recordSale, type SaleSource, voidSale } from "./sales";
 
@@ -14,25 +14,42 @@ export type Order = typeof orders.$inferSelect;
 export type OrderItem = typeof orderItems.$inferSelect;
 export type ItemState = OrderItem["state"];
 
+/** An order row as a channel's normalizer builds it. Columns left out are kept as they are. */
+export type OrderValues = Omit<typeof orders.$inferInsert, "id" | "customerId" | "firstSeenAt" | "syncedAt">;
+export type OrderItemValues = Omit<
+  typeof orderItems.$inferInsert,
+  "id" | "orderId" | "state" | "problem" | "productId" | "saleId"
+>;
+export type NormalizedOrder = { order: OrderValues; items: OrderItemValues[]; customer?: CustomerInput | null };
+
 /** Who the app records channel sales as. */
-export const SYNC_ACTOR = "amazon-sync";
+export const syncActor = (source: SaleSource) => `${source}-sync`;
 
-/** Amazon statuses where the buyer has paid, so the sale counts. */
-const PAID = new Set(["Unshipped", "PartiallyShipped", "Shipped", "InvoiceUnconfirmed"]);
-const CANCELED = new Set(["Canceled", "Unfulfillable"]);
+const CHANNEL_NAMES: Partial<Record<SaleSource, string>> = { amazon: "Amazon", shopify: "Shopify" };
 
-export function wantedState(status: string): "paid" | "waiting" | "canceled" {
-  if (PAID.has(status)) return "paid";
-  if (CANCELED.has(status)) return "canceled";
-  return "waiting"; // Pending, PendingAvailability
+/** Statuses where the buyer has paid, so the sale counts. */
+const PAID: Partial<Record<SaleSource, Set<string>>> = {
+  amazon: new Set(["Unshipped", "PartiallyShipped", "Shipped", "InvoiceUnconfirmed"]),
+  // Shopify's displayFinancialStatus. A partial refund keeps the sale (returns aren't handled yet).
+  shopify: new Set(["PAID", "PARTIALLY_PAID", "PARTIALLY_REFUNDED"]),
+};
+const CANCELED: Partial<Record<SaleSource, Set<string>>> = {
+  amazon: new Set(["Canceled", "Unfulfillable"]),
+  shopify: new Set(["REFUNDED", "VOIDED"]),
+};
+
+export function wantedState(source: SaleSource, status: string, canceledAt?: Date | null): "paid" | "waiting" | "canceled" {
+  if (canceledAt || CANCELED[source]?.has(status)) return "canceled";
+  if (PAID[source]?.has(status)) return "paid";
+  return "waiting"; // Amazon Pending; Shopify PENDING, AUTHORIZED
 }
 
 export const saleRef = (o: Pick<Order, "source" | "externalId">, i: Pick<OrderItem, "externalItemId">) =>
   `${o.source}:${o.externalId}:${i.externalItemId}`;
 
 /**
- * Insert or update an order and its lines. An older copy never overwrites a
- * newer one. Returns the order id and whether anything changed.
+ * Insert or update an order and its lines, and link it to its customer. An
+ * older copy never overwrites a newer one. Returns the order id and whether anything changed.
  */
 export async function saveOrder(db: DB, n: NormalizedOrder): Promise<{ id: string; changed: boolean }> {
   return db.transaction(async (tx) => {
@@ -45,12 +62,14 @@ export async function saveOrder(db: DB, n: NormalizedOrder): Promise<{ id: strin
       return { id: existing.id, changed: false };
     }
 
+    const customerId = n.customer ? await matchCustomer(tx, n.order.source, n.customer) : undefined;
+    const values = { ...n.order, ...(customerId ? { customerId } : {}) };
     let id: string;
     if (existing) {
       id = existing.id;
-      await tx.update(orders).set({ ...n.order, syncedAt: new Date() }).where(eq(orders.id, id));
+      await tx.update(orders).set({ ...values, syncedAt: new Date() }).where(eq(orders.id, id));
     } else {
-      [{ id }] = await tx.insert(orders).values(n.order).returning({ id: orders.id });
+      [{ id }] = await tx.insert(orders).values(values).returning({ id: orders.id });
     }
     for (const item of n.items) {
       const { externalItemId, ...data } = item;
@@ -78,11 +97,12 @@ const setItem = (db: DB, id: string, values: Partial<OrderItem>) => db.update(or
  * Bring stock in line with the order: paid lines become sales, canceled lines
  * undo theirs, unpaid lines wait. Lines that can't be recorded yet say why.
  */
-export async function applyOrder(db: DB, orderId: string, actor = SYNC_ACTOR) {
+export async function applyOrder(db: DB, orderId: string, actorOverride?: string) {
   const [order] = await db.select().from(orders).where(eq(orders.id, orderId));
   if (!order) throw new UserError("Order not found.");
+  const actor = actorOverride ?? syncActor(order.source);
   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
-  const want = wantedState(order.status);
+  const want = wantedState(order.source, order.status, order.canceledAt);
 
   for (const item of items) {
     if (want === "canceled" || item.qtyOrdered < 1) {
@@ -123,7 +143,7 @@ export async function applyOrder(db: DB, orderId: string, actor = SYNC_ACTOR) {
         soldOn: todayInMichigan(order.purchasedAt),
         source: order.source,
         externalRef: saleRef(order, item),
-        note: `${order.marketplace ?? ""} order ${order.externalId}`.trim(),
+        note: saleNote(order),
       });
       await setItem(db, item.id, { state: "recorded", problem: null, productId: mapping.productId, saleId: sale.id });
     } catch (err) {
@@ -131,6 +151,11 @@ export async function applyOrder(db: DB, orderId: string, actor = SYNC_ACTOR) {
       await setItem(db, item.id, { state: "needs_recipe", problem: err.message, productId: mapping.productId });
     }
   }
+}
+
+function saleNote(o: Order) {
+  if (o.source === "amazon") return `${o.marketplace ?? ""} order ${o.externalId}`.trim();
+  return `${CHANNEL_NAMES[o.source] ?? o.source} order ${o.orderName ?? o.externalId}`;
 }
 
 /** Try again on every order with a line waiting for a SKU link or a recipe. */
@@ -190,6 +215,7 @@ export async function removeChannelSku(db: DB, id: string) {
 
 export type OrderFilters = {
   source?: SaleSource;
+  customerId?: string;
   marketplace?: string;
   status?: string;
   problemsOnly?: boolean;
@@ -219,15 +245,19 @@ async function itemsFor(db: DB, orderIds: string[]) {
     .orderBy(orderItems.externalItemId);
 }
 
+const customerName = sql<string | null>`nullif(trim(coalesce(${customers.firstName}, '') || ' ' || coalesce(${customers.lastName}, '')), '')`;
+
 export async function listOrders(db: DB, f: OrderFilters = {}) {
   const limit = Math.min(f.limit ?? 50, 200);
   const q = f.q?.trim();
   const rows = await db
-    .select({ order: orders })
+    .select({ order: orders, customerName: customerName })
     .from(orders)
+    .leftJoin(customers, eq(orders.customerId, customers.id))
     .where(
       and(
         f.source ? eq(orders.source, f.source) : undefined,
+        f.customerId ? eq(orders.customerId, f.customerId) : undefined,
         f.marketplace ? eq(orders.marketplace, f.marketplace) : undefined,
         f.status ? eq(orders.status, f.status) : undefined,
         f.before ? lt(orders.purchasedAt, new Date(f.before)) : undefined,
@@ -237,6 +267,9 @@ export async function listOrders(db: DB, f: OrderFilters = {}) {
         q
           ? or(
               ilike(orders.externalId, `%${q}%`),
+              ilike(orders.orderName, `%${q}%`),
+              ilike(orders.email, `%${q}%`),
+              ilike(sql`coalesce(${customers.firstName}, '') || ' ' || coalesce(${customers.lastName}, '')`, `%${q}%`),
               sql`exists (select 1 from ${orderItems} where ${orderItems.orderId} = ${orders.id} and (${ilike(orderItems.sku, `%${q}%`)} or ${ilike(orderItems.title, `%${q}%`)}))`,
             )
           : undefined,
@@ -245,10 +278,14 @@ export async function listOrders(db: DB, f: OrderFilters = {}) {
     .orderBy(desc(orders.purchasedAt), desc(orders.id))
     .limit(limit + 1);
 
-  const page = rows.slice(0, limit).map((r) => r.order);
-  const items = await itemsFor(db, page.map((o) => o.id));
+  const page = rows.slice(0, limit);
+  const items = await itemsFor(db, page.map((r) => r.order.id));
   return {
-    orders: page.map((o) => ({ ...withoutRaw(o), items: items.filter((i) => i.item.orderId === o.id).map(slimItem) })),
+    orders: page.map(({ order: o, customerName }) => ({
+      ...withoutRaw(o),
+      customerName,
+      items: items.filter((i) => i.item.orderId === o.id).map(slimItem),
+    })),
     more: rows.length > limit,
   };
 }
@@ -266,7 +303,16 @@ export async function getOrder(db: DB, id: string) {
   const [order] = await db.select().from(orders).where(eq(orders.id, id));
   if (!order) return null;
   const items = await itemsFor(db, [id]);
-  return { ...order, items: items.map(({ item, ...rest }) => ({ ...item, ...rest })) };
+  let customer = null;
+  if (order.customerId) {
+    const [c] = await db
+      .select({ id: customers.id, email: customers.email, name: customerName, phone: customers.phone })
+      .from(customers)
+      .where(eq(customers.id, order.customerId));
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(orders).where(eq(orders.customerId, order.customerId));
+    customer = c ? { ...c, orderCount: n } : null;
+  }
+  return { ...order, customer, items: items.map(({ item, ...rest }) => ({ ...item, ...rest })) };
 }
 
 /** What needs a person: unknown SKUs and products without a recipe. */
@@ -315,14 +361,17 @@ export async function markSyncStarted(db: DB, source: SaleSource) {
 
 export async function markSyncDone(db: DB, source: SaleSource, input: { cursor: Date | null; ordersSeen: number }) {
   await db
-    .update(channelSync)
-    .set({
-      ...(input.cursor ? { cursor: sql`greatest(${channelSync.cursor}, ${input.cursor.toISOString()}::timestamptz)` } : {}),
-      lastOkAt: new Date(),
-      lastError: null,
-      ordersSeen: sql`${channelSync.ordersSeen} + ${input.ordersSeen}`,
-    })
-    .where(eq(channelSync.source, source));
+    .insert(channelSync)
+    .values({ source, cursor: input.cursor, lastOkAt: new Date(), ordersSeen: input.ordersSeen })
+    .onConflictDoUpdate({
+      target: channelSync.source,
+      set: {
+        ...(input.cursor ? { cursor: sql`greatest(${channelSync.cursor}, ${input.cursor.toISOString()}::timestamptz)` } : {}),
+        lastOkAt: new Date(),
+        lastError: null,
+        ordersSeen: sql`${channelSync.ordersSeen} + ${input.ordersSeen}`,
+      },
+    });
 }
 
 export async function markSyncFailed(db: DB, source: SaleSource, message: string) {
@@ -341,4 +390,12 @@ export async function orderIdsForSales(db: DB, saleIds: string[]) {
     .innerJoin(orders, eq(orderItems.orderId, orders.id))
     .where(and(inArray(orderItems.saleId, saleIds), sql`${orderItems.saleId} is not null`));
   return new Map(rows.map((r) => [r.saleId as string, r]));
+}
+
+/** A channel webhook arrived (shown as "last webhook received"). */
+export async function markEventReceived(db: DB, source: SaleSource) {
+  await db
+    .insert(channelSync)
+    .values({ source, lastEventAt: new Date() })
+    .onConflictDoUpdate({ target: channelSync.source, set: { lastEventAt: new Date() } });
 }

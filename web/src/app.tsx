@@ -6,6 +6,8 @@ import { useApi } from "./api";
 import { Nav } from "./components/nav";
 import { Denied, Splash } from "./components/splash";
 import { useCan } from "./me";
+import { CustomerPage } from "./pages/customer";
+import { CustomersPage } from "./pages/customers";
 import { InboxPage } from "./pages/inbox";
 import { InventoryPage } from "./pages/inventory";
 import { NewRollPage } from "./pages/new-roll";
@@ -32,6 +34,8 @@ export function App() {
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="orders" element={<RequirePermission need="orders"><OrdersPage /></RequirePermission>} />
         <Route path="orders/:id" element={<RequirePermission need="orders"><OrderPage /></RequirePermission>} />
+        <Route path="customers" element={<RequirePermission need="orders"><CustomersPage /></RequirePermission>} />
+        <Route path="customers/:id" element={<RequirePermission need="orders"><CustomerPage /></RequirePermission>} />
         <Route path="inbox" element={<RequirePermission need="invoices:review"><InboxPage /></RequirePermission>} />
         <Route path="settings" element={<RequirePermission need="settings"><SettingsPage /></RequirePermission>} />
         <Route path="users" element={<RequirePermission need="users"><UsersPage /></RequirePermission>} />

@@ -18,6 +18,9 @@ import {
   setDocumentStatus,
 } from "../domain/invoices";
 import { markSyncFailed } from "../domain/orders";
+import { ShopifyError } from "../shopify/admin-api";
+import type { ShopifySource } from "../shopify/order-source";
+import { ingestOrderById, pullBegin, pullEnd, pullPage } from "../shopify/sync";
 import { getAccount, saveHistoryId as storeHistoryId, saveWatch } from "../email/account";
 import { type AttachmentRef, DOCUMENT_TYPES, type ParsedMessage, senderAddress } from "../email/gmail";
 import type { MailSource } from "../email/mail-source";
@@ -37,11 +40,27 @@ export interface ActivityDeps {
   };
   /** Amazon orders; null when AMAZON_MODE=off. */
   orders?: OrderSource | null;
+  /** Shopify orders; null when SHOPIFY_MODE=off. */
+  shopify?: ShopifySource | null;
 }
 
 export type SupplierRef = { id: string; name: string; kind: SupplierKind };
 
-export function createActivities({ db, mail, reader, store, orders = null }: ActivityDeps) {
+/** Bad keys or a bad request won't fix themselves; throttling and outages will. */
+async function shopifyCall<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof ShopifyError && !err.retryable) throw ApplicationFailure.nonRetryable(err.message, "ShopifyError");
+    throw err;
+  }
+}
+
+export function createActivities({ db, mail, reader, store, orders = null, shopify = null }: ActivityDeps) {
+  const needShopify = () => {
+    if (!shopify) throw ApplicationFailure.nonRetryable("Shopify is off (SHOPIFY_MODE=off).", "ShopifyOff");
+    return shopify;
+  };
   return {
     async getStoredHistoryId(email: string): Promise<string> {
       return (await getAccount(db, email))?.historyId ?? "0";
@@ -153,6 +172,31 @@ export function createActivities({ db, mail, reader, store, orders = null }: Act
 
     async amazonSyncFailed(message: string): Promise<void> {
       await markSyncFailed(db, "amazon", message.slice(0, 1000));
+    },
+
+    // ── Shopify orders ──
+
+    async shopifyIngestOrder(orderGid: string) {
+      const source = needShopify();
+      return shopifyCall(() => ingestOrderById(db, source, orderGid));
+    },
+
+    async shopifyPullBegin(since: string | null): Promise<string> {
+      return pullBegin(db, since);
+    },
+
+    async shopifyPullPage(since: string, cursor: string | null) {
+      const source = needShopify();
+      heartbeat();
+      return shopifyCall(() => pullPage(db, source, since, cursor));
+    },
+
+    async shopifyPullEnd(maxUpdated: string | null, saved: number): Promise<void> {
+      await pullEnd(db, maxUpdated, saved);
+    },
+
+    async shopifyFailed(message: string): Promise<void> {
+      await markSyncFailed(db, "shopify", message.slice(0, 1000));
     },
   };
 }
