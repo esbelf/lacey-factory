@@ -126,6 +126,14 @@ describe("email workflows", () => {
         args: [{ account: ACCOUNT, messageId: "m2" }],
       });
       expect(other).toBe("not_a_supplier");
+
+      // Deleted before the worker fetched it: ends cleanly instead of retrying.
+      const gone = await env.client.workflow.execute(WORKFLOWS.processEmail, {
+        workflowId: "email-test-deleted",
+        taskQueue: "test",
+        args: [{ account: ACCOUNT, messageId: "deleted" }],
+      });
+      expect(gone).toBe("message_gone");
     });
 
     const rolls = await db.select().from(schema.rolls);

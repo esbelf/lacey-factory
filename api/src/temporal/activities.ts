@@ -74,7 +74,7 @@ export function createActivities({ db, mail, reader, store, orders = null, shopi
       return mail.listNewMessages(email, sinceHistoryId);
     },
 
-    async fetchMessage(account: string, messageId: string): Promise<ParsedMessage> {
+    async fetchMessage(account: string, messageId: string): Promise<ParsedMessage | null> {
       return mail.getMessage(account, messageId);
     },
 

@@ -18,7 +18,7 @@ const read = proxyActivities<Activities>({
   retry: { initialInterval: "10s", backoffCoefficient: 2, maximumAttempts: 5 },
 });
 
-export type EmailOutcome = "not_a_supplier" | "no_documents" | "done";
+export type EmailOutcome = "message_gone" | "not_a_supplier" | "no_documents" | "done";
 
 /**
  * One email: is it from a supplier → archive each document to S3 → read it
@@ -27,6 +27,8 @@ export type EmailOutcome = "not_a_supplier" | "no_documents" | "done";
  */
 export async function processEmailWorkflow(input: { account: string; messageId: string }): Promise<EmailOutcome> {
   const message = await acts.fetchMessage(input.account, input.messageId);
+  // Deleted before we got to it (or a draft Gmail replaced): nothing to do.
+  if (!message) return "message_gone";
   const supplier = await acts.matchSupplier(message.from);
   if (!supplier) return "not_a_supplier";
   if (message.attachments.length === 0) {

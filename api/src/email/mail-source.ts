@@ -14,7 +14,8 @@ import { type AttachmentRef, documentMimeType, GmailApi, GmailApiError, type Par
 export interface MailSource {
   /** Message ids added to INBOX after sinceHistoryId, plus the newest history id. */
   listNewMessages(email: string, sinceHistoryId: string): Promise<{ messageIds: string[]; historyId: string }>;
-  getMessage(email: string, messageId: string): Promise<ParsedMessage>;
+  /** null when the email no longer exists (deleted, or a draft that was replaced). */
+  getMessage(email: string, messageId: string): Promise<ParsedMessage | null>;
   getAttachment(email: string, messageId: string, ref: AttachmentRef): Promise<Buffer>;
   renewWatch(email: string): Promise<{ historyId: string; expiresAt: string }>;
 }
@@ -69,7 +70,14 @@ export class LiveMailSource implements MailSource {
 
   async getMessage(email: string, messageId: string) {
     const api = await this.api(email);
-    return this.guard(email, async () => parseGmailMessage(await api.message(messageId)));
+    return this.guard(email, async () => {
+      try {
+        return parseGmailMessage(await api.message(messageId));
+      } catch (err) {
+        if (err instanceof GmailApiError && err.status === 404) return null;
+        throw err;
+      }
+    });
   }
 
   async getAttachment(email: string, messageId: string, ref: AttachmentRef) {
@@ -129,9 +137,9 @@ export class FakeMailSource implements MailSource {
     return { messageIds: emails.map((e) => e.id), historyId: String(Math.max(since, ...emails.map((e) => e.historyId))) };
   }
 
-  async getMessage(email: string, messageId: string): Promise<ParsedMessage> {
+  async getMessage(email: string, messageId: string): Promise<ParsedMessage | null> {
     const found = (await this.all(email)).find((e) => e.id === messageId);
-    if (!found) throw ApplicationFailure.nonRetryable(`Fake message ${messageId} not found`, "NotFound");
+    if (!found) return null;
     return {
       id: found.id,
       from: found.from,
