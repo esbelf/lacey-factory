@@ -108,8 +108,6 @@ export function fakeShopifyOrder(input: {
           originalTotalSet: money(line),
           totalDiscountSet: money(0),
           taxLines: rates.map((t) => ({ title: t.title, rate: t.rate, priceSet: money(round(line * t.rate)) })),
-          variant: { id: `gid://shopify/ProductVariant/${n + 1}` },
-          product: { id: `gid://shopify/Product/${n + 1}` },
         };
       }),
     },

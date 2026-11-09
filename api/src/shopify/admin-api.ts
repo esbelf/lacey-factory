@@ -34,7 +34,6 @@ export const ORDER_FIELDS = `
       id sku name title variantTitle quantity vendor
       originalTotalSet { ${MONEY} } totalDiscountSet { ${MONEY} }
       taxLines { ${TAX} }
-      variant { id } product { id }
     }
   }
 `;
