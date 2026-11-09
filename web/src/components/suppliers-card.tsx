@@ -25,7 +25,7 @@ export function SuppliersCard({
   const active = materials.filter((m) => m.active);
 
   return (
-    <Card title="Suppliers (invoice emails)" className="lg:col-span-2">
+    <Card title="Suppliers (invoice emails)">
       <p className="mb-4 text-sm text-muted">
         Emails to eric@lakemat.com from these addresses are read automatically.
         For a rolls supplier, each product code below turns invoice lines into
