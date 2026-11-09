@@ -1,4 +1,3 @@
-import { formatMoney } from "@lacey-factory/shared/money";
 import type { ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 
@@ -7,6 +6,7 @@ import { ActionForm, SubmitButton } from "../components/action-form";
 import { Loading } from "../components/loading";
 import {
   CHANNEL_LABEL,
+  CostLine,
   formatDateTime,
   formatPrice,
   ItemStateBadge,
@@ -317,8 +317,7 @@ function OrdersTable({ orders }: { orders: NonNullable<ReturnType<typeof useOrde
                     <ItemStateBadge state={i.state} />
                     {i.state === "recorded" && i.steelCost != null && (
                       <span className="text-sm text-muted">
-                        steel {formatMoney(i.steelCost)} · box {formatMoney(i.boxCost)}
-                        {i.short && <span className="ml-1 font-semibold text-danger">short</span>}
+                        <CostLine c={i} />
                       </span>
                     )}
                   </li>

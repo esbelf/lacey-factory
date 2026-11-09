@@ -1,7 +1,7 @@
 // Supplier documents → rolls. Matching is pure (planRolls); registration is one
 // transaction that is safe to repeat (registerRolls).
 import { todayInMichigan } from "@lacey-factory/shared/feet";
-import { sumMoney } from "@lacey-factory/shared/money";
+import { fromUnits, sumMoney, toUnits } from "@lacey-factory/shared/money";
 import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 
 import {
@@ -18,9 +18,19 @@ import type { DB, Tx } from "../db/types";
 import type { DocumentExtraction } from "../temporal/extract";
 import { UserError } from "./errors";
 import { createRoll } from "./services";
+import { allocateFreight } from "./steel";
 
 export type SupplierProduct = typeof supplierProducts.$inferSelect;
-export type PlannedRoll = { materialId: string; widthFt: number; lengthFt: number; supplierRollNo: string | null };
+export type PlannedRoll = {
+  materialId: string;
+  widthFt: number;
+  lengthFt: number;
+  supplierRollNo: string | null;
+  /** Price of one roll before freight, from the invoice line; null when it has none. */
+  unitCost?: number | null;
+  /** Which invoice line it came from, so freight is split by line. */
+  line?: number;
+};
 export type RollPlan = { ok: true; rolls: PlannedRoll[] } | { ok: false; reason: string };
 
 const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
@@ -65,6 +75,38 @@ function isChargeLine(line: DocumentExtraction["lines"][number]) {
   return !line.product_code && line.width_ft == null && line.length_ft == null && line.roll_numbers.length === 0;
 }
 
+/** Price per roll: the line's rate when it's priced per roll, else its amount ÷ rolls. */
+function rollPrice(line: DocumentExtraction["lines"][number], rolls: number): number | null {
+  if (line.unit_price != null && ROLL_UOM.test(line.uom ?? "")) return line.unit_price;
+  if (line.amount != null && rolls > 0) return fromUnits(Math.round(toUnits(line.amount) / rolls));
+  return null;
+}
+
+/**
+ * Each roll's cost: its line's price plus that line's share of the freight
+ * (split by dollar value, like steel), spread evenly over the line's rolls.
+ */
+export function rollCosts(planned: PlannedRoll[], freight: number | null | undefined): (number | null)[] {
+  const groups = new Map<number, { unitCost: number; count: number }>();
+  planned.forEach((r, i) => {
+    if (r.unitCost == null) return;
+    const key = r.line ?? -1 - i;
+    const g = groups.get(key) ?? { unitCost: r.unitCost, count: 0 };
+    g.count++;
+    groups.set(key, g);
+  });
+  const keys = [...groups.keys()];
+  const shares = allocateFreight(
+    keys.map((k) => ({ amount: groups.get(k)!.unitCost * groups.get(k)!.count, qty: groups.get(k)!.count })),
+    freight ?? 0,
+  );
+  const perRollFreight = new Map(keys.map((k, i) => [k, Math.round(toUnits(shares[i]) / groups.get(k)!.count)]));
+  return planned.map((r, i) => {
+    if (r.unitCost == null) return null;
+    return fromUnits(toUnits(r.unitCost) + perRollFreight.get(r.line ?? -1 - i)!);
+  });
+}
+
 /**
  * Turns a document's lines into rolls to register, or explains why a person
  * needs to look at it. Every product line must map to a known supplier
@@ -76,7 +118,7 @@ export function planRolls(doc: DocumentExtraction, products: SupplierProduct[]):
   const lines = doc.lines.filter((l) => !isChargeLine(l));
   if (lines.length === 0) return { ok: false, reason: "No product lines found." };
 
-  for (const line of lines) {
+  for (const [lineNo, line] of lines.entries()) {
     const label = line.product_code ? `${line.product_code} ${line.description}` : line.description;
     const found = findProduct(line, products);
     if ("ambiguous" in found) return { ok: false, reason: `"${label}" matches more than one product.` };
@@ -100,7 +142,10 @@ export function planRolls(doc: DocumentExtraction, products: SupplierProduct[]):
     } else {
       return { ok: false, reason: `Can't tell how many rolls "${label}" is (quantity ${line.quantity ?? "?"} ${line.uom ?? ""}).` };
     }
-    for (const n of numbers) out.push({ materialId: p.materialId, widthFt: p.widthFt, lengthFt: p.lengthFt, supplierRollNo: n });
+    const unitCost = rollPrice(line, numbers.length);
+    for (const n of numbers) {
+      out.push({ materialId: p.materialId, widthFt: p.widthFt, lengthFt: p.lengthFt, supplierRollNo: n, unitCost, line: lineNo });
+    }
   }
 
   const tickets = out.map((r) => r.supplierRollNo).filter(Boolean);
@@ -307,7 +352,7 @@ export async function registerRolls(
   db: DB,
   documentId: string,
   planned: PlannedRoll[],
-  opts: { actor: string; receivedOn?: string; reviewedBy?: string },
+  opts: { actor: string; receivedOn?: string; reviewedBy?: string; freight?: number | null },
 ): Promise<RegisterResult> {
   if (planned.length === 0) throw new UserError("Add at least one roll.");
   return db.transaction(async (tx) => {
@@ -322,8 +367,10 @@ export async function registerRolls(
     const receivedOn = opts.receivedOn ?? receivedOnFor(doc);
     const ref = doc.invoiceNumber ? `#${doc.invoiceNumber}` : `from ${doc.filename}`;
     const rollIds: string[] = [];
-    for (const r of planned) {
+    const costs = rollCosts(planned, opts.freight);
+    for (const [i, r] of planned.entries()) {
       const roll = await createRoll(tx as unknown as DB, opts.actor, {
+        cost: costs[i],
         materialId: r.materialId,
         supplierRollNo: r.supplierRollNo,
         supplier: supplier?.name ?? null,
@@ -374,7 +421,7 @@ export async function autoRegister(db: DB, documentId: string) {
     await setDocumentStatus(db, doc.id, "needs_review", plan.reason);
     return { status: "needs_review" as const, reason: plan.reason };
   }
-  return registerRolls(db, doc.id, plan.rolls, { actor: "invoice-import" });
+  return registerRolls(db, doc.id, plan.rolls, { actor: "invoice-import", freight: freightTotal(extraction) });
 }
 
 export async function listDocuments(db: DB, limit = 100) {

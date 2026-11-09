@@ -1,3 +1,4 @@
+import { formatMoney, sumMoney } from "@lacey-factory/shared/money";
 import clsx from "clsx";
 
 import { post, type Product } from "../api";
@@ -134,5 +135,22 @@ export function SkuLinkForm({
       </Field>
       <SubmitButton variant="secondary">Link</SubmitButton>
     </ActionForm>
+  );
+}
+
+/** "COGS $123.45 = steel $40 · box $5 · fabric $70 · sewing $8.45", with warnings when a cost isn't known yet. */
+export function CostLine({
+  c,
+}: {
+  c: { steelCost: number | null; boxCost: number | null; fabricCost: number | null; sewingCost: number | null; short?: boolean | null; costMissing?: boolean | null };
+}) {
+  const parts = [c.steelCost, c.boxCost, c.fabricCost, c.sewingCost].map((n) => n ?? 0);
+  return (
+    <>
+      COGS <span className="font-semibold">{formatMoney(sumMoney(parts))}</span> = steel {formatMoney(c.steelCost)} · box{" "}
+      {formatMoney(c.boxCost)} · fabric {formatMoney(c.fabricCost)} · sewing {formatMoney(c.sewingCost)}
+      {c.short && <span className="ml-1 font-semibold text-danger">· steel short</span>}
+      {c.costMissing && <span className="ml-1 font-semibold text-danger">· some costs not set</span>}
+    </>
   );
 }

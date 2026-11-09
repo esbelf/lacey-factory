@@ -10,11 +10,13 @@ import type { DB } from "../src/db/types";
 import { loadCatalog } from "../src/domain/catalog";
 import {
   autoRegister,
+  freightTotal,
   matchSupplier,
   parsePatterns,
   planRolls,
   receivedOnFor,
   recordDocument,
+  rollCosts,
   saveExtraction,
   saveSupplier,
   type SupplierProduct,
@@ -42,6 +44,8 @@ describe("planRolls", () => {
         widthFt: 12.5,
         lengthFt: 360,
         supplierRollNo: n,
+        unitCost: null, // a packing list has no prices
+        line: expect.any(Number),
       })),
     });
   });
@@ -50,6 +54,9 @@ describe("planRolls", () => {
     const plan = planRolls(hanesInvoice, [product]);
     expect(plan.ok && plan.rolls.length).toBe(4);
     expect(plan.ok && plan.rolls.every((r) => r.supplierRollNo === null)).toBe(true);
+    // $545 a roll; the $250 freight is split over the 4 rolls: $607.50 each.
+    expect(plan.ok && plan.rolls.every((r) => r.unitCost === 545)).toBe(true);
+    expect(plan.ok && rollCosts(plan.rolls, freightTotal(hanesInvoice))).toEqual([607.5, 607.5, 607.5, 607.5]);
   });
 
   it("falls back to the description when the code is missing", () => {

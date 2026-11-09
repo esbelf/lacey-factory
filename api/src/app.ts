@@ -9,6 +9,7 @@ import type { Authenticate } from "./auth";
 import { amazonConfig, emailConfig, shopifyConfig } from "./config";
 import type { DB } from "./db/types";
 import { loadCatalog } from "./domain/catalog";
+import { setRollCost } from "./domain/cogs";
 import * as cust from "./domain/customers";
 import { UserError } from "./domain/errors";
 import * as inv from "./domain/invoices";
@@ -90,6 +91,8 @@ const reviewLines = z.preprocess(
         lengthFt: z.coerce.number().positive("Length must be greater than 0."),
         count: z.coerce.number().int("Whole numbers only.").min(1, "Each line needs at least 1 roll."),
         rollNumbers: z.string().optional().default(""),
+        /** Price of one roll before freight. */
+        rollCost: optionalDollars.optional(),
       }),
     )
     .min(1, "Add at least one line."),
@@ -293,7 +296,7 @@ export function createApp(deps: AppDeps) {
       return ok(c, i.boxId ? "Box saved." : "Box removed.");
     })
     .patch("/products/:id", need("settings"), async (c) => {
-      const i = await input(c, z.object({ sku: text, shipWeightLb: optionalFt }));
+      const i = await input(c, z.object({ sku: text, shipWeightLb: optionalFt, sewCostInHouse: optionalDollars, sewCostSummit: optionalDollars }));
       await q.updateProductShipping(c.var.db, param(c, "id"), i);
       return ok(c, "Saved.");
     })
@@ -351,6 +354,11 @@ export function createApp(deps: AppDeps) {
       const i = await input(c, z.object({ closedOn: isoDate, leftoverFtMeasured: optionalFt }));
       await svc.closeRoll(c.var.db, { ...i, rollId: param(c, "id") });
       return ok(c, "Roll closed out.");
+    })
+    .patch("/rolls/:id/cost", need("settings"), async (c) => {
+      const i = await input(c, z.object({ cost: optionalDollars }));
+      await setRollCost(c.var.db, param(c, "id"), i.cost);
+      return ok(c, i.cost == null ? "Price cleared." : "Price saved. Sales from this roll were re-costed.");
     })
     .post("/rolls/:id/reopen", need("rolls:close"), async (c) => {
       await svc.reopenRoll(c.var.db, param(c, "id"));
@@ -534,21 +542,29 @@ export function createApp(deps: AppDeps) {
       return c.json({ url: await deps.documentUrl(doc.s3Key) });
     })
     .post("/documents/:id/register", need("invoices:review"), async (c) => {
-      const i = await input(c, z.object({ receivedOn: isoDate, lines: reviewLines }));
+      const i = await input(c, z.object({ receivedOn: isoDate, lines: reviewLines, freight: optionalDollars }));
       const planned: inv.PlannedRoll[] = [];
-      for (const l of i.lines) {
+      for (const [line, l] of i.lines.entries()) {
         const numbers = l.rollNumbers.split(/[\s,]+/).filter(Boolean);
         if (numbers.length && numbers.length !== l.count) {
           throw new UserError(`A line has ${l.count} rolls but ${numbers.length} roll numbers.`);
         }
         for (let n = 0; n < l.count; n++) {
-          planned.push({ materialId: l.materialId, widthFt: l.widthFt, lengthFt: l.lengthFt, supplierRollNo: numbers[n] ?? null });
+          planned.push({
+            materialId: l.materialId,
+            widthFt: l.widthFt,
+            lengthFt: l.lengthFt,
+            supplierRollNo: numbers[n] ?? null,
+            unitCost: l.rollCost ?? null,
+            line,
+          });
         }
       }
       const r = await inv.registerRolls(c.var.db, param(c, "id"), planned, {
         actor: c.var.user.email,
         receivedOn: i.receivedOn,
         reviewedBy: c.var.user.email,
+        freight: i.freight,
       });
       if (r.status === "duplicate") return ok(c, "This invoice was already registered from another email.");
       return ok(c, `Registered ${r.rollIds.length} roll${r.rollIds.length === 1 ? "" : "s"}.`);

@@ -17,6 +17,7 @@ import {
   steelUsage,
 } from "../db/schema";
 import type { DB } from "../db/types";
+import { refreshFabricCost, sewingCost } from "./cogs";
 import { UserError } from "./errors";
 import { lockSteelItems, refreshSaleCost, settleShortages, takeSteel } from "./steel";
 
@@ -46,7 +47,11 @@ export async function recordSale(
         .from(productSteel)
         .innerJoin(steelItems, eq(productSteel.steelItemId, steelItems.id))
         .where(eq(productSteel.productId, product.id)),
-      tx.select().from(productComponents).where(eq(productComponents.productId, product.id)),
+      tx
+        .select({ cutSizeId: productComponents.cutSizeId, qty: productComponents.qty, requiresSewing: cutSizes.requiresSewing })
+        .from(productComponents)
+        .innerJoin(cutSizes, eq(productComponents.cutSizeId, cutSizes.id))
+        .where(eq(productComponents.productId, product.id)),
     ]);
     // A box alone isn't a recipe: selling would take the box but no fabric or steel.
     if (!steel.some((s) => s.kind === "steel") && fabric.length === 0) {
@@ -89,17 +94,24 @@ export async function recordSale(
     }
 
     // Fabric: oldest in-stock pieces; anything beyond them comes off the adjustment count.
+    const sewn = { inHouse: 0, summit: 0 };
     const sizeIds = [...new Set(fabric.map((f) => f.cutSizeId))].sort();
     if (sizeIds.length) await tx.select({ id: cutSizes.id }).from(cutSizes).where(inArray(cutSizes.id, sizeIds)).for("update");
     for (const f of fabric) {
       const need = f.qty * input.qty;
       const got = await tx
-        .select({ id: pieces.id })
+        .select({ id: pieces.id, sewnBy: pieces.sewnBy })
         .from(pieces)
         .where(and(eq(pieces.cutSizeId, f.cutSizeId), eq(pieces.status, "in_stock"), isNull(pieces.voidedAt)))
         .orderBy(asc(pieces.cutOn), asc(pieces.createdAt), asc(pieces.id))
         .limit(need)
         .for("update");
+      if (f.requiresSewing) {
+        for (const p of got) {
+          if (p.sewnBy === "summit") sewn.summit++;
+          else if (p.sewnBy === "in_house") sewn.inHouse++;
+        }
+      }
       if (got.length) {
         await tx
           .update(pieces)
@@ -120,6 +132,15 @@ export async function recordSale(
     }
 
     await refreshSaleCost(tx, sale.id);
+    await refreshFabricCost(tx, sale.id);
+    // Sewing is charged at today's rates and doesn't change later.
+    const sewing = sewingCost(
+      input.qty,
+      fabric.some((f) => f.requiresSewing),
+      sewn,
+      { inHouse: product.sewCostInHouse, summit: product.sewCostSummit },
+    );
+    await tx.update(sales).set({ sewingCost: sewing.cost, sewingCostMissing: sewing.missing }).where(eq(sales.id, sale.id));
     const [saved] = await tx.select().from(sales).where(eq(sales.id, sale.id));
     return { sale: saved, created: true };
   });

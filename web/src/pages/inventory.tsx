@@ -6,6 +6,7 @@ import { Link } from "react-router";
 import { post, type Product, type SaleRow, type SteelData, useApi } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { Loading } from "../components/loading";
+import { CostLine } from "../components/orders-ui";
 import { boxSize } from "../components/steel-cards";
 import { Card, Empty, Field, formatDate, Input, PageHeader, Select, Table } from "../components/ui";
 import { useCan } from "../me";
@@ -283,8 +284,10 @@ function RecentSales({ sales, canUndo }: { sales: SaleRow[]; canUndo: boolean })
             <li key={sale.id} className="flex flex-wrap items-center gap-3 py-2">
               <div className="min-w-0 flex-1">
                 <div className="font-medium">
-                  {sale.qty} × {productName} · steel {formatMoney(sale.steelCost)} · box {formatMoney(sale.boxCost)}
-                  {sale.short && <span className="ml-2 text-sm font-semibold text-danger">short</span>}
+                  {sale.qty} × {productName}
+                </div>
+                <div className="text-sm">
+                  <CostLine c={{ ...sale, costMissing: sale.fabricCostMissing || sale.sewingCostMissing }} />
                 </div>
                 <div className="text-sm text-muted">
                   {formatDate(sale.soldOn)} · {SALE_SOURCE[sale.source]}

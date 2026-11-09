@@ -235,6 +235,9 @@ async function itemsFor(db: DB, orderIds: string[]) {
       productName: products.name,
       steelCost: sales.steelCost,
       boxCost: sales.boxCost,
+      fabricCost: sales.fabricCost,
+      sewingCost: sales.sewingCost,
+      costMissing: sql<boolean>`${sales.fabricCostMissing} or ${sales.sewingCostMissing}`,
       short: sales.short,
       saleVoided: sql<boolean>`${sales.voidedAt} is not null`,
     })

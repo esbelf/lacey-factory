@@ -64,6 +64,13 @@
       "when": 1794222607884,
       "tag": "0008_cut_size_sewing",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794223677630,
+      "tag": "0009_fabric_sewing_cost",
+      "breakpoints": true
     }
   ]
 }

@@ -144,6 +144,8 @@ export async function createRoll(
     lengthFt: number;
     receivedOn: string;
     notes?: string | null;
+    /** Whole roll, freight included. */
+    cost?: number | null;
   },
 ) {
   if (!(input.widthFt > 0) || !(input.lengthFt > 0)) {
@@ -161,6 +163,7 @@ export async function createRoll(
       lengthFt: input.lengthFt,
       receivedOn: input.receivedOn,
       notes: input.notes?.trim() || null,
+      cost: input.cost ?? null,
       createdBy: actor,
     })
     .returning();

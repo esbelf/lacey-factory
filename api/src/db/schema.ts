@@ -87,6 +87,11 @@ export const rolls = pgTable(
     // compare it to the computed remaining length.
     closedOn: date("closed_on", { mode: "string" }),
     leftoverFtMeasured: feet("leftover_ft_measured"),
+    /**
+     * What the whole roll cost us, with its share of the invoice freight.
+     * A piece's fabric cost is its cut length × cost ÷ lengthFt. Null = not known yet.
+     */
+    cost: money("cost"),
     notes: text("notes"),
     // Set when the roll was registered from a supplier invoice email.
     sourceDocumentId: uuid("source_document_id").references(() => supplierDocuments.id),
@@ -208,6 +213,9 @@ export const products = pgTable(
     sku: text("sku"),
     /** Packed weight with its box, in pounds. */
     shipWeightLb: numeric("ship_weight_lb", { precision: 7, scale: 2, mode: "number" }),
+    /** Sewing cost per product when its pieces were sewn in-house / at Summit. */
+    sewCostInHouse: money("sew_cost_in_house"),
+    sewCostSummit: money("sew_cost_summit"),
     sortOrder: integer("sort_order").notNull().default(0),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
@@ -483,6 +491,14 @@ export const sales = pgTable(
     steelCost: money("steel_cost").notNull().default(0),
     /** Shipping box cost (FIFO landed cost). */
     boxCost: money("box_cost").notNull().default(0),
+    /** Fabric cost: each piece's share of its roll's price (oldest pieces first). */
+    fabricCost: money("fabric_cost").notNull().default(0),
+    /** True when a piece's roll has no price yet (or none to estimate from); filled in when one is set. */
+    fabricCostMissing: boolean("fabric_cost_missing").notNull().default(false),
+    /** Sewing cost at the product's rates when it sold, by who sewed its pieces. */
+    sewingCost: money("sewing_cost").notNull().default(0),
+    /** True when the product had no sewing rate for how it was sewn. */
+    sewingCostMissing: boolean("sewing_cost_missing").notNull().default(false),
     /** True while some of its steel wasn't in stock; cleared when a delivery fills it in. */
     short: boolean("short").notNull().default(false),
     note: text("note"),

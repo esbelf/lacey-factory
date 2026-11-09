@@ -287,11 +287,18 @@ export async function listProducts(db: DB) {
 }
 
 /** A product's own SKU and packed weight. */
-export async function updateProductShipping(db: DB, id: string, input: { sku?: string | null; shipWeightLb: number | null }) {
+export async function updateProductShipping(
+  db: DB,
+  id: string,
+  input: { sku?: string | null; shipWeightLb: number | null; sewCostInHouse?: number | null; sewCostSummit?: number | null },
+) {
   const sku = input.sku?.trim() || null;
   if (sku) {
     const [clash] = await db.select({ id: products.id, name: products.name }).from(products).where(eq(products.sku, sku));
     if (clash && clash.id !== id) throw new UserError(`SKU ${sku} is already used by ${clash.name}.`);
   }
-  await db.update(products).set({ sku, shipWeightLb: input.shipWeightLb }).where(eq(products.id, id));
+  await db
+    .update(products)
+    .set({ sku, shipWeightLb: input.shipWeightLb, sewCostInHouse: input.sewCostInHouse ?? null, sewCostSummit: input.sewCostSummit ?? null })
+    .where(eq(products.id, id));
 }

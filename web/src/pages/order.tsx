@@ -1,10 +1,9 @@
-import { formatMoney } from "@lacey-factory/shared/money";
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router";
 
 import { type OrderDetail, useOrder } from "../api";
 import { Loading } from "../components/loading";
-import { AddressBlock, CHANNEL_LABEL, formatDateTime, formatPrice, ItemStateBadge, MARKET_LABEL } from "../components/orders-ui";
+import { AddressBlock, CHANNEL_LABEL, CostLine, formatDateTime, formatPrice, ItemStateBadge, MARKET_LABEL } from "../components/orders-ui";
 import { Card, PageHeader, Table } from "../components/ui";
 import { useTitle } from "../title";
 
@@ -101,8 +100,7 @@ export function OrderPage() {
                     {i.problem && <div className="mt-1 text-sm text-danger">{i.problem}</div>}
                     {i.state === "recorded" && i.steelCost != null && (
                       <div className="mt-1 text-sm text-muted">
-                        Steel {formatMoney(i.steelCost)} · box {formatMoney(i.boxCost)}
-                        {i.short && <span className="ml-1 font-semibold text-danger">(short)</span>}
+                        <CostLine c={i} />
                       </div>
                     )}
                   </td>

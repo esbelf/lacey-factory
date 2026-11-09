@@ -1,3 +1,5 @@
+import { formatMoney } from "@lacey-factory/shared/money";
+
 import { patch, post, type Product, type SteelData } from "../api";
 import { ActionForm, SubmitButton } from "./action-form";
 import { Card, Empty, Field, Input, Select } from "./ui";
@@ -109,6 +111,8 @@ export function ProductsCard({ products, steelItems, canEdit }: { products: Prod
                 Steel: {parts.length ? parts.map((s) => `${s.qty} × ${s.name}`).join(" + ") : <span className="text-muted">none</span>}
                 {" · "}Box: {box ? box.name : <span className="text-danger">none</span>}
                 {product.shipWeightLb != null && ` · ${product.shipWeightLb} lb packed`}
+                {(product.sewCostInHouse != null || product.sewCostSummit != null) &&
+                  ` · Sewing: in-house ${formatMoney(product.sewCostInHouse)}, Summit ${formatMoney(product.sewCostSummit)}`}
               </div>
               {canEdit && (
                 <div className="mt-2 flex flex-wrap items-end gap-x-6 gap-y-2">
@@ -154,6 +158,12 @@ export function ProductsCard({ products, steelItems, canEdit }: { products: Prod
                     <Field label="Packed lb">
                       <Input name="shipWeightLb" type="number" step="0.01" min="0" inputMode="decimal" defaultValue={product.shipWeightLb ?? ""} className="w-24" />
                     </Field>
+                    <Field label="Sewing in-house $" hint="Per product">
+                      <Input name="sewCostInHouse" type="number" step="0.01" min="0" inputMode="decimal" defaultValue={product.sewCostInHouse ?? ""} className="w-28" />
+                    </Field>
+                    <Field label="Sewing at Summit $" hint="Per product">
+                      <Input name="sewCostSummit" type="number" step="0.01" min="0" inputMode="decimal" defaultValue={product.sewCostSummit ?? ""} className="w-28" />
+                    </Field>
                     <SubmitButton variant="secondary">Save</SubmitButton>
                   </ActionForm>
                 </div>
@@ -165,6 +175,7 @@ export function ProductsCard({ products, steelItems, canEdit }: { products: Prod
       <p className="mt-3 text-sm text-muted">
         Nothing is set aside for a product until it sells. A sale takes out the steel, fabric and box listed here. A
         product needs fabric or steel before it can be sold. LakeMat and MuckMat draw from the same sewn N06 pieces.
+        Sewing cost is charged per product sold, by who sewed its pieces, at the rates set when it sells.
       </p>
     </Card>
   );

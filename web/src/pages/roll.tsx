@@ -1,7 +1,8 @@
 import { formatFeet, subtractFeet, todayInMichigan } from "@lacey-factory/shared/feet";
+import { formatMoney } from "@lacey-factory/shared/money";
 import { useParams } from "react-router";
 
-import { documentFileUrl, post, useRoll } from "../api";
+import { documentFileUrl, patch, post, useRoll } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { CutForm } from "../components/cut-form";
 import { Loading } from "../components/loading";
@@ -149,6 +150,26 @@ export function RollPage() {
                   <SubmitButton variant="secondary">Close out</SubmitButton>
                 </div>
               </ActionForm>
+            </Card>
+          )}
+          {can("settings") && (
+            <Card title="Price">
+              {roll.cost == null ? (
+                <p className="mb-3 text-danger">No price yet. Sales of pieces from this roll show fabric cost as missing.</p>
+              ) : (
+                <p className="mb-3">
+                  {formatMoney(roll.cost)} for the roll · {formatMoney(roll.cost / roll.lengthFt)} per foot
+                </p>
+              )}
+              <ActionForm action={patch(`/api/rolls/${roll.id}/cost`)} className="flex flex-wrap items-end gap-2">
+                <Field label="Whole roll, with freight ($)">
+                  <Input name="cost" type="number" step="0.01" min="0" inputMode="decimal" defaultValue={roll.cost ?? ""} className="w-36" />
+                </Field>
+                <SubmitButton variant="secondary">Save</SubmitButton>
+              </ActionForm>
+              <p className="mt-2 text-sm text-muted">
+                A piece costs its cut length × the price per foot. Changing it re-costs sales from this roll.
+              </p>
             </Card>
           )}
           {roll.notes && (

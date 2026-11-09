@@ -170,7 +170,14 @@ function ViewButton({ id }: { id: string }) {
   );
 }
 
-type Line = { materialId: string; widthFt: string; lengthFt: string; count: string; rollNumbers: string };
+type Line = { materialId: string; widthFt: string; lengthFt: string; count: string; rollNumbers: string; rollCost: string };
+
+/** Price of one roll from the invoice line: its rate when priced per roll, else amount ÷ rolls. */
+function rollPriceGuess(l: NonNullable<Extraction["lines"]>[number], count: number): string {
+  if (l.unit_price != null && /^(roll|rolls|rl|rls)$/i.test(l.uom ?? "")) return String(l.unit_price);
+  if (l.amount != null && count > 0) return String(Math.round((l.amount / count) * 100) / 100);
+  return "";
+}
 
 /** Pre-filled from Claude's reading; a person fixes it and registers the rolls. */
 function ReviewCard({ doc, materials: active }: { doc: SupplierDocument; materials: { id: string; name: string }[] }) {
@@ -181,14 +188,20 @@ function ReviewCard({ doc, materials: active }: { doc: SupplierDocument; materia
   const [lines, setLines] = useState<Line[]>(() =>
     (extracted.lines ?? [])
       .filter((l) => l.product_code || l.width_ft != null || l.roll_numbers.length)
-      .map((l) => ({
-        materialId: guess(l.description),
-        widthFt: l.width_ft?.toString() ?? "",
-        lengthFt: l.length_ft?.toString() ?? "",
-        count: String(l.roll_numbers.length || (l.uom && /^(roll|rl)s?$/i.test(l.uom) ? l.quantity : "") || ""),
-        rollNumbers: l.roll_numbers.join(", "),
-      })),
+      .map((l) => {
+        const count = String(l.roll_numbers.length || (l.uom && /^(roll|rl)s?$/i.test(l.uom) ? l.quantity : "") || "");
+        return {
+          materialId: guess(l.description),
+          widthFt: l.width_ft?.toString() ?? "",
+          lengthFt: l.length_ft?.toString() ?? "",
+          count,
+          rollNumbers: l.roll_numbers.join(", "),
+          rollCost: rollPriceGuess(l, Number(count)),
+        };
+      }),
   );
+  const freightAmounts = (extracted.lines ?? []).filter((l) => l.line_kind === "freight" && l.amount != null).map((l) => l.amount!);
+  const freightGuess = freightAmounts.length ? String(sumMoney(freightAmounts)) : "";
   const set = (i: number, patch: Partial<Line>) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const receivedOn = doc.shipDate ?? doc.invoiceDate ?? todayInMichigan();
 
@@ -237,6 +250,9 @@ function ReviewCard({ doc, materials: active }: { doc: SupplierDocument; materia
             <Field label="Roll numbers (optional)">
               <Input value={l.rollNumbers} onChange={(e) => set(i, { rollNumbers: e.target.value })} className="w-72" />
             </Field>
+            <Field label="Price per roll ($)" hint="Before freight">
+              <Input value={l.rollCost} onChange={(e) => set(i, { rollCost: e.target.value })} inputMode="decimal" className="w-28" />
+            </Field>
             <button type="button" className={buttonClass("ghost")} onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))}>
               Remove
             </button>
@@ -246,7 +262,7 @@ function ReviewCard({ doc, materials: active }: { doc: SupplierDocument; materia
           <button
             type="button"
             className={buttonClass("secondary")}
-            onClick={() => setLines((ls) => [...ls, { materialId: "", widthFt: "", lengthFt: "", count: "1", rollNumbers: "" }])}
+            onClick={() => setLines((ls) => [...ls, { materialId: "", widthFt: "", lengthFt: "", count: "1", rollNumbers: "", rollCost: "" }])}
           >
             + Add line
           </button>
@@ -254,6 +270,9 @@ function ReviewCard({ doc, materials: active }: { doc: SupplierDocument; materia
         <div className="flex flex-wrap items-end gap-3">
           <Field label="Received on">
             <Input type="date" name="receivedOn" defaultValue={receivedOn} required />
+          </Field>
+          <Field label="Freight ($)" hint="Split over the rolls by price">
+            <Input name="freight" defaultValue={freightGuess} inputMode="decimal" className="w-28" />
           </Field>
           <SubmitButton>Register rolls</SubmitButton>
         </div>
