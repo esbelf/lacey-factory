@@ -57,6 +57,13 @@
       "when": 1793904250640,
       "tag": "0007_shopify_customers",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794222607884,
+      "tag": "0008_cut_size_sewing",
+      "breakpoints": true
     }
   ]
 }

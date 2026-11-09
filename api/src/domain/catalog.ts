@@ -56,6 +56,7 @@ export async function loadCatalog(db: DB): Promise<CatalogResult> {
               productFamily: s.usedFor,
               sortOrder: i + 1,
               active: false,
+              requiresSewing: s.requiresSewing ?? m.requiresSewing,
             })
             .returning({ id: cutSizes.id });
           added.sizes++;

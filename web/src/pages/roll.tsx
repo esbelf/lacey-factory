@@ -99,7 +99,7 @@ export function RollPage() {
                     </div>
                     {can("undo") &&
                       !s.voidedAt &&
-                      s.lines.every((l) => l.stillCut === l.qty || !material.requiresSewing) && (
+                      s.lines.every((l) => l.movedOn === 0) && (
                         <ActionForm
                           action={post(`/api/cuts/${s.id}/void`)}
                           confirm="Undo this cut? The pieces will be removed."

@@ -76,6 +76,8 @@ export async function createCutSize(
     cutLengthFt: number;
     productFamily?: string | null;
     sortOrder?: number;
+    /** Defaults to the material's setting. */
+    requiresSewing?: boolean;
   },
 ) {
   const label = input.label.trim();
@@ -88,6 +90,8 @@ export async function createCutSize(
     .from(cutSizes)
     .where(and(eq(cutSizes.materialId, input.materialId), eq(cutSizes.label, label)));
   if (dup.length) throw new UserError(`Size "${label}" already exists for this material.`);
+  const [mat] = await db.select({ requiresSewing: materials.requiresSewing }).from(materials).where(eq(materials.id, input.materialId));
+  if (!mat) throw new UserError("Material not found.");
   const [row] = await db
     .insert(cutSizes)
     .values({
@@ -97,21 +101,34 @@ export async function createCutSize(
       cutLengthFt: input.cutLengthFt,
       productFamily: input.productFamily?.trim() || null,
       sortOrder: input.sortOrder ?? 0,
+      requiresSewing: input.requiresSewing ?? mat.requiresSewing,
     })
     .returning();
   return row;
 }
 
-/** Changing the cut length only affects future cuts; past pieces keep theirs. */
+/**
+ * Changing the cut length only affects future cuts; past pieces keep theirs.
+ * Switching a size to "not sewn" moves its pieces waiting to be sewn into
+ * inventory, so none are left stuck on the To sew list.
+ */
 export async function updateCutSize(
   db: DB,
   id: string,
-  input: { cutLengthFt?: number; productFamily?: string | null; sortOrder?: number; active?: boolean },
+  input: { cutLengthFt?: number; productFamily?: string | null; sortOrder?: number; active?: boolean; requiresSewing?: boolean },
 ) {
   if (input.cutLengthFt !== undefined && !(input.cutLengthFt > 0)) {
     throw new UserError("Cut length must be greater than 0.");
   }
-  await db.update(cutSizes).set(input).where(eq(cutSizes.id, id));
+  await db.transaction(async (tx) => {
+    await tx.update(cutSizes).set(input).where(eq(cutSizes.id, id));
+    if (input.requiresSewing === false) {
+      await tx
+        .update(pieces)
+        .set({ status: "in_stock", sewnBy: "not_sewn" })
+        .where(and(eq(pieces.cutSizeId, id), eq(pieces.status, "cut"), isNull(pieces.voidedAt)));
+    }
+  });
 }
 
 // ───────────────────────── Rolls & cutting ─────────────────────────
@@ -173,7 +190,6 @@ export async function recordCut(
       throw new UserError(`Cut date can't be before the roll was received (${roll.receivedOn}).`);
     }
 
-    const [mat] = await tx.select().from(materials).where(eq(materials.id, roll.materialId));
     const sizes = await tx
       .select()
       .from(cutSizes)
@@ -200,10 +216,10 @@ export async function recordCut(
       .values({ rollId: roll.id, cutOn: input.cutOn, notes: input.notes?.trim() || null, createdBy: actor })
       .returning();
 
-    // Materials that aren't sewn (geogrid) go straight to inventory.
-    const sewn = mat.requiresSewing;
-    const rows = input.lines.flatMap((l) =>
-      Array.from({ length: l.qty }, () => ({
+    // Sizes that aren't sewn (geogrid, SandMat) go straight to inventory.
+    const rows = input.lines.flatMap((l) => {
+      const sewn = sizeById.get(l.cutSizeId)!.requiresSewing;
+      return Array.from({ length: l.qty }, () => ({
         cutSessionId: session.id,
         rollId: roll.id,
         cutSizeId: l.cutSizeId,
@@ -211,8 +227,8 @@ export async function recordCut(
         cutOn: input.cutOn,
         status: sewn ? ("cut" as const) : ("in_stock" as const),
         sewnBy: sewn ? null : ("not_sewn" as const),
-      })),
-    );
+      }));
+    });
     await tx.insert(pieces).values(rows);
     return { session, remainingAfter: subtractFeet(remaining, needed) };
   });
@@ -290,7 +306,7 @@ async function takeOldest(
 
 async function sizeLabel(tx: Tx, cutSizeId: string) {
   const [s] = await tx
-    .select({ label: cutSizes.label, material: materials.name, requiresSewing: materials.requiresSewing })
+    .select({ label: cutSizes.label, material: materials.name, requiresSewing: cutSizes.requiresSewing })
     .from(cutSizes)
     .innerJoin(materials, eq(cutSizes.materialId, materials.id))
     .where(eq(cutSizes.id, cutSizeId));
@@ -302,7 +318,7 @@ async function takeForLines(tx: Tx, lines: Line[], status: "cut" | "at_summit", 
   const taken: (typeof pieces.$inferSelect)[] = [];
   for (const l of lines) {
     const s = await sizeLabel(tx, l.cutSizeId);
-    if (!s.requiresSewing) throw new UserError(`${s.material} isn't sewn.`);
+    if (!s.requiresSewing) throw new UserError(`${s.material} ${s.label} isn't sewn.`);
     const got = await takeOldest(tx, l.cutSizeId, l.qty, status);
     if (got.length < l.qty) {
       const where = status === "cut" ? "waiting to be sewn" : "at Summit";

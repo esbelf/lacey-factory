@@ -147,6 +147,36 @@ describe("production flow", () => {
     expect((await stage("grid24")).onHand).toBe(0);
   });
 
+  it("lets one size of a sewn material skip sewing (SandMat on N06)", async () => {
+    const sand = await svc.createCutSize(db, { materialId: fabricId, label: "12x20", widthFt: 12, cutLengthFt: 20, requiresSewing: false });
+    size.sand = sand.id;
+    expect(sand.requiresSewing).toBe(false);
+    // Sizes default to their material's setting.
+    expect((await svc.createCutSize(db, { materialId: fabricId, label: "12x30", widthFt: 12, cutLengthFt: 30 })).requiresSewing).toBe(true);
+
+    const r = await svc.createRoll(db, ME, { materialId: fabricId, widthFt: 12, lengthFt: 200, receivedOn: "2026-10-01" });
+    await svc.recordCut(db, ME, {
+      rollId: r.id,
+      cutOn: "2026-10-02",
+      lines: [
+        { cutSizeId: size.sand, qty: 2 },
+        { cutSizeId: size["12x24"], qty: 1 },
+      ],
+    });
+    expect(await stage("sand")).toMatchObject({ cut: 0, requiresSewing: false });
+    expect((await stage("sand")).onHand).toBe(2);
+    await expect(
+      svc.markSewnInHouse(db, ME, { sewnOn: "2026-10-03", lines: [{ cutSizeId: size.sand, qty: 1 }] }),
+    ).rejects.toThrow(/Fabric 12x20 isn't sewn/);
+
+    // Unticking "Gets sewn" moves pieces waiting to be sewn into inventory.
+    const waiting = (await stage("12x24")).cut;
+    const onHand = (await stage("12x24")).onHand;
+    await svc.updateCutSize(db, size["12x24"], { requiresSewing: false });
+    expect(await stage("12x24")).toMatchObject({ cut: 0, onHand: onHand + waiting });
+    await svc.updateCutSize(db, size["12x24"], { requiresSewing: true });
+  });
+
   it("applies inventory adjustments and never goes negative", async () => {
     await svc.adjustInventory(db, ME, { cutSizeId: size["12x14"], qty: 30, reason: "opening_balance", adjustedOn: "2026-10-27" });
     await svc.adjustInventory(db, ME, { cutSizeId: size["12x14"], qty: -2, reason: "count_correction", adjustedOn: "2026-10-27" });

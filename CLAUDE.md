@@ -52,6 +52,7 @@ npm workspaces:
 - Money uses `numeric(14,4)` and `shared/src/money.ts` (`sumMoney`/`mulMoney`, ten-thousandths of a dollar), the same way feet use `feet.ts`.
 - Undo is a soft void (`voidedAt`/`voidedBy`), so queries must filter `voidedAt IS NULL`.
 - `pieces` has one row per physical piece. Status flows `cut` → `at_summit` → `in_stock`, and pieces are picked **FIFO** by `cutOn`.
+- Sewing is decided per cut size (`cut_sizes.requires_sewing`), not per material: N06 LakeMat sizes are sewn, N06 SandMat sizes aren't. Unsewn sizes are cut straight to `in_stock` with `sewn_by = not_sewn`. `materials.requires_sewing` is only the default for a material's new sizes.
 - Feet arithmetic must use `sumFeet`/`subtractFeet` from `shared/src/feet.ts`, which work in hundredths. Default dates use `todayInMichigan()`.
 - `src/db/index.ts` uses node-postgres for both the compose DB and Neon. All code is typed against the generic `DB`/`Tx` in `src/db/types.ts`, so PGlite works in tests.
 - The catalog seed (`src/db/catalog.ts` with `src/domain/catalog.ts`) is idempotent and never overwrites cut lengths.

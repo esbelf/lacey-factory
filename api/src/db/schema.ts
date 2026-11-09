@@ -36,7 +36,8 @@ export const materials = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     name: text("name").notNull(),
-    // Geogrid doesn't get sewn: its cut pieces go straight to inventory.
+    // Default for new sizes of this material. Each cut size has its own
+    // setting (cut_sizes.requires_sewing), which is what cutting uses.
     requiresSewing: boolean("requires_sewing").notNull().default(true),
     defaultWidthFt: feet("default_width_ft"),
     active: boolean("active").notNull().default(true),
@@ -57,6 +58,8 @@ export const cutSizes = pgTable(
     widthFt: feet("width_ft").notNull(),
     cutLengthFt: feet("cut_length_ft").notNull(), // length taken off the roll, e.g. 26
     productFamily: text("product_family"), // e.g. "LakeMat / MuckMat XL"
+    // false: cut pieces go straight to inventory (geogrid, SandMat on N06).
+    requiresSewing: boolean("requires_sewing").notNull().default(true),
     sortOrder: integer("sort_order").notNull().default(0),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),

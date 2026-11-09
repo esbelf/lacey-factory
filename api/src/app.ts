@@ -243,21 +243,25 @@ export function createApp(deps: AppDeps) {
           cutLengthFt: ft,
           productFamily: text,
           sortOrder: z.coerce.number().int().default(0),
+          // "" = same as the material
+          sewing: z.enum(["", "sewn", "not_sewn"]).default(""),
         }),
       );
-      await svc.createCutSize(c.var.db, i);
+      const { sewing, ...rest } = i;
+      await svc.createCutSize(c.var.db, { ...rest, requiresSewing: sewing === "" ? undefined : sewing === "sewn" });
       return ok(c, `Added ${i.label}.`);
     })
     .patch("/cut-sizes/:id", need("settings"), async (c) => {
       const i = await input(
         c,
-        z.object({ cutLengthFt: ft, productFamily: text, sortOrder: z.coerce.number().int(), active: checkbox }),
+        z.object({ cutLengthFt: ft, productFamily: text, sortOrder: z.coerce.number().int(), active: checkbox, requiresSewing: checkbox }),
       );
       await svc.updateCutSize(c.var.db, param(c, "id"), {
         cutLengthFt: i.cutLengthFt,
         productFamily: i.productFamily?.trim() || null,
         sortOrder: i.sortOrder,
         active: i.active,
+        requiresSewing: i.requiresSewing,
       });
       return ok(c, "Saved.");
     })

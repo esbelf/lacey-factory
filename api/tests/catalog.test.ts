@@ -21,8 +21,8 @@ beforeAll(async () => {
 });
 
 describe("LakeMat catalog", () => {
-  it("adds the four materials, 13 sizes, 44 products and 12 boxes", async () => {
-    expect(await loadCatalog(db)).toEqual({ materials: 4, sizes: 13, products: 44, components: 18, suppliers: 1, boxes: 12 });
+  it("adds the four materials, 30 sizes, 44 products and 12 boxes", async () => {
+    expect(await loadCatalog(db)).toEqual({ materials: 4, sizes: 30, products: 44, components: 18, suppliers: 1, boxes: 12 });
   });
 
   it("adds nothing the second time", async () => {
@@ -55,6 +55,11 @@ describe("LakeMat catalog", () => {
     const hpg6 = sizes.find((s) => s.materialName === "TerraTex HPG-57" && s.size.label === "6x14")!;
     expect(hpg6.size).toMatchObject({ widthFt: 14, cutLengthFt: 6 });
     expect(sizes.find((s) => s.materialName === "TerraGrid RX1100")!.requiresSewing).toBe(false);
+    // N06 is sewn for LakeMat but not for SandMat.
+    const n06 = (label: string) => sizes.find((s) => s.materialName === "TerraTex N06" && s.size.label === label)!;
+    expect(n06("12x24").requiresSewing).toBe(true);
+    expect(n06("12x20").requiresSewing).toBe(false);
+    expect(n06("7x100").requiresSewing).toBe(false);
 
     await svc.updateCutSize(db, hpg6.size.id, { cutLengthFt: 6.5, active: true });
     await loadCatalog(db);

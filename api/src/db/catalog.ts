@@ -13,7 +13,8 @@ export type CatalogMaterial = {
   name: string;
   requiresSewing: boolean;
   defaultWidthFt: number | null; // usual roll width; null = not given yet
-  sizes: { label: string; widthFt: number; finishedLengthFt: number; usedFor: string }[];
+  /** requiresSewing on a size overrides the material's (SandMat on N06 isn't sewn). */
+  sizes: { label: string; widthFt: number; finishedLengthFt: number; usedFor: string; requiresSewing?: boolean }[];
 };
 
 export const N06 = "TerraTex N06";
@@ -30,6 +31,20 @@ export const CATALOG_MATERIALS: CatalogMaterial[] = [
       { label: "12x24", widthFt: 12, finishedLengthFt: 24, usedFor: "LakeMat / MuckMat XL" },
       { label: "12x19", widthFt: 12, finishedLengthFt: 19, usedFor: "LakeMat / MuckMat L" },
       { label: "12x14", widthFt: 12, finishedLengthFt: 14, usedFor: "LakeMat / MuckMat M" },
+      { label: "12x20", widthFt: 12, finishedLengthFt: 20, usedFor: "SandMat 12x20 / SandMat MAX 12x20", requiresSewing: false },
+      { label: "12x30", widthFt: 12, finishedLengthFt: 30, usedFor: "SandMat 12x30 / SandMat MAX 12x30", requiresSewing: false },
+      { label: "12x40", widthFt: 12, finishedLengthFt: 40, usedFor: "SandMat 12x40 / SandMat MAX 12x40", requiresSewing: false },
+      { label: "12x50", widthFt: 12, finishedLengthFt: 50, usedFor: "SandMat 12x50", requiresSewing: false },
+      { label: "12x60", widthFt: 12, finishedLengthFt: 60, usedFor: "SandMat 12x60", requiresSewing: false },
+      { label: "12x70", widthFt: 12, finishedLengthFt: 70, usedFor: "SandMat 12x70", requiresSewing: false },
+      { label: "12x80", widthFt: 12, finishedLengthFt: 80, usedFor: "SandMat 12x80", requiresSewing: false },
+      { label: "12x90", widthFt: 12, finishedLengthFt: 90, usedFor: "SandMat 12x90", requiresSewing: false },
+      { label: "12x100", widthFt: 12, finishedLengthFt: 100, usedFor: "SandMat 12x100", requiresSewing: false },
+      { label: "7x20", widthFt: 7, finishedLengthFt: 20, usedFor: "SandMat 7x20", requiresSewing: false },
+      { label: "7x30", widthFt: 7, finishedLengthFt: 30, usedFor: "SandMat 7x30", requiresSewing: false },
+      { label: "7x40", widthFt: 7, finishedLengthFt: 40, usedFor: "SandMat 7x40", requiresSewing: false },
+      { label: "7x50", widthFt: 7, finishedLengthFt: 50, usedFor: "SandMat 7x50", requiresSewing: false },
+      { label: "7x100", widthFt: 7, finishedLengthFt: 100, usedFor: "SandMat 7x100", requiresSewing: false },
     ],
   },
   {
@@ -41,6 +56,9 @@ export const CATALOG_MATERIALS: CatalogMaterial[] = [
       { label: "12x24", widthFt: 12, finishedLengthFt: 24, usedFor: "MuckMat XL" },
       { label: "12x19", widthFt: 12, finishedLengthFt: 19, usedFor: "MuckMat L" },
       { label: "12x14", widthFt: 12, finishedLengthFt: 14, usedFor: "MuckMat M" },
+      { label: "12x20", widthFt: 12, finishedLengthFt: 20, usedFor: "SandMat MAX 20'" },
+      { label: "12x30", widthFt: 12, finishedLengthFt: 30, usedFor: "SandMat MAX 30'" },
+      { label: "12x40", widthFt: 12, finishedLengthFt: 40, usedFor: "SandMat MAX 40'" },
     ],
   },
   {

@@ -34,7 +34,7 @@ export async function listMaterials(db: DB) {
 
 export async function listCutSizes(db: DB) {
   return db
-    .select({ size: cutSizes, materialName: materials.name, requiresSewing: materials.requiresSewing })
+    .select({ size: cutSizes, materialName: materials.name, requiresSewing: cutSizes.requiresSewing })
     .from(cutSizes)
     .innerJoin(materials, eq(cutSizes.materialId, materials.id))
     .orderBy(asc(materials.name), asc(cutSizes.sortOrder), asc(cutSizes.label));
@@ -85,6 +85,8 @@ export async function getRoll(db: DB, id: string) {
       qty: sql<number>`count(*)::int`,
       feet: sql<number>`sum(${pieces.cutLengthFt})::float`,
       stillCut: sql<number>`count(*) filter (where ${pieces.status} = 'cut')::int`,
+      // Pieces sewn, at Summit or sold: these block undoing the cut.
+      movedOn: sql<number>`count(*) filter (where ${pieces.status} = 'sold' or (${pieces.status} <> 'cut' and ${pieces.sewnBy} is distinct from 'not_sewn'))::int`,
     })
     .from(pieces)
     .innerJoin(cutSizes, eq(pieces.cutSizeId, cutSizes.id))
@@ -135,7 +137,7 @@ export async function pipelineBySize(db: DB) {
       label: cutSizes.label,
       productFamily: cutSizes.productFamily,
       materialName: materials.name,
-      requiresSewing: materials.requiresSewing,
+      requiresSewing: cutSizes.requiresSewing,
       active: cutSizes.active,
       cut: sql<number>`count(${pieces.id}) filter (where ${pieces.status} = 'cut' and ${pieces.voidedAt} is null)::int`,
       atSummit: sql<number>`count(${pieces.id}) filter (where ${pieces.status} = 'at_summit' and ${pieces.voidedAt} is null)::int`,
@@ -145,7 +147,7 @@ export async function pipelineBySize(db: DB) {
     .from(cutSizes)
     .innerJoin(materials, eq(cutSizes.materialId, materials.id))
     .leftJoin(pieces, eq(pieces.cutSizeId, cutSizes.id))
-    .groupBy(cutSizes.id, materials.name, materials.requiresSewing)
+    .groupBy(cutSizes.id, materials.name)
     .orderBy(asc(materials.name), asc(cutSizes.sortOrder), asc(cutSizes.label));
 
   const adj = await db

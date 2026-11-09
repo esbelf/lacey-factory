@@ -44,7 +44,7 @@ export function SettingsPage() {
                   <div className="flex-1">
                     <div className="font-semibold">{m.name}</div>
                     <div className="text-sm text-muted">
-                      {m.requiresSewing ? "Gets sewn" : "Not sewn — cuts go straight to inventory"}
+                      {m.requiresSewing ? "New sizes get sewn" : "New sizes aren't sewn — cuts go straight to inventory"}
                       {m.defaultWidthFt != null && ` · usual width ${formatFeet(m.defaultWidthFt)}`}
                     </div>
                   </div>
@@ -68,7 +68,7 @@ export function SettingsPage() {
             </Field>
             <label className="flex items-center gap-2 text-base">
               <input type="checkbox" name="requiresSewing" defaultChecked className="h-5 w-5" />
-              Gets sewn (uncheck for geogrid)
+              New sizes get sewn (uncheck for geogrid)
             </label>
             <div>
               <SubmitButton>Add material</SubmitButton>
@@ -88,6 +88,9 @@ export function SettingsPage() {
                       <div className="text-lg font-semibold">{size.label}</div>
                       <div className="text-sm text-muted">
                         {materialName} · {formatFeet(size.widthFt)} wide
+                      </div>
+                      <div className="text-sm text-muted">
+                        {size.requiresSewing ? "Gets sewn" : "Not sewn — cuts go straight to inventory"}
                       </div>
                       {!size.active && (
                         <div className="text-sm font-semibold text-danger">
@@ -115,13 +118,19 @@ export function SettingsPage() {
                     <label className="flex h-11 items-center gap-2">
                       <input type="checkbox" name="active" defaultChecked={size.active} className="h-5 w-5" /> Active
                     </label>
+                    <label className="flex h-11 items-center gap-2">
+                      <input type="checkbox" name="requiresSewing" defaultChecked={size.requiresSewing} className="h-5 w-5" /> Gets sewn
+                    </label>
                     <SubmitButton variant="secondary">Save</SubmitButton>
                   </ActionForm>
                 </li>
               ))}
             </ul>
           )}
-          <p className="mt-3 text-sm text-muted">Changing a cut length only affects future cuts.</p>
+          <p className="mt-3 text-sm text-muted">
+            Changing a cut length only affects future cuts. Unticking "Gets sewn" moves that size's pieces waiting to be
+            sewn into inventory.
+          </p>
         </Card>
 
         <Card title="Add cut size">
@@ -156,6 +165,13 @@ export function SettingsPage() {
               </Field>
               <Field label="Order">
                 <Input name="sortOrder" type="number" step="1" defaultValue={0} />
+              </Field>
+              <Field label="Sewing">
+                <Select name="sewing" defaultValue="">
+                  <option value="">Same as the material</option>
+                  <option value="sewn">Gets sewn</option>
+                  <option value="not_sewn">Not sewn — straight to inventory</option>
+                </Select>
               </Field>
               <div>
                 <SubmitButton>Add size</SubmitButton>
