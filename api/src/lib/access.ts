@@ -13,7 +13,7 @@ export function parseAllowlist(raw: string | undefined): Set<string> {
 /**
  * Who may use the factory app: a verified @lakemat.com email, or a verified
  * email on the allowlist (floor crew without a lakemat.com account).
- * Mirrors the Auth0 Post-Login Action in auth0/post-login-action.js.
+ * Mirrors the Auth0 Post-Login Action in ../terraform-lacey-factory/auth0/post-login-action.js.
  */
 export function isAllowedEmail(
   email: string | null | undefined,

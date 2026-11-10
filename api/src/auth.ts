@@ -8,7 +8,7 @@ export type Identity = { email: string; name: string | null };
 /** Returns the caller, null if not signed in, or "denied" if signed in but not allowed. */
 export type Authenticate = (req: Request) => Promise<Identity | null | "denied">;
 
-/** Custom claims added to the access token by auth0/post-login-action.js. */
+/** Custom claims added to the access token by the Auth0 post-login action (../terraform-lacey-factory/auth0/post-login-action.js). */
 export const CLAIM_NS = "https://factory.lakemat.com/";
 
 /**

@@ -1,0 +1,64 @@
+# Pushes to main deploy to staging. Production is deployed by hand:
+# Actions → Deploy → Run workflow → production (the "production" GitHub
+# Environment should require a reviewer).
+#
+# Settings are GitHub Environment variables (no secrets): `make github-vars
+# ENV=<env>` in ../terraform-lacey-factory sets them all (AWS and VITE_AUTH0_*).
+# AWS access is through OIDC (the <prefix>-github-deploy role).
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        type: choice
+        options: [production, staging]
+        default: production
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}
+      url: ${{ vars.APP_URL }}
+    # Never two deploys of the same environment at once; a queued one waits.
+    concurrency:
+      group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Deploy
+        run: scripts/deploy.sh "${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}"
+        env:
+          SKIP_TESTS: "1"
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          WEB_BUCKET: ${{ vars.WEB_BUCKET }}
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+          LAMBDA_FUNCTION_NAME: ${{ vars.LAMBDA_FUNCTION_NAME }}
+          ECR_REPOSITORY_URL: ${{ vars.ECR_REPOSITORY_URL }}
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+          APP_SECRETS_ARN: ${{ vars.APP_SECRETS_ARN }}
+          VITE_AUTH0_DOMAIN: ${{ vars.VITE_AUTH0_DOMAIN }}
+          VITE_AUTH0_CLIENT_ID: ${{ vars.VITE_AUTH0_CLIENT_ID }}
+          VITE_AUTH0_AUDIENCE: ${{ vars.VITE_AUTH0_AUDIENCE }}

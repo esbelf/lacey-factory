@@ -74,7 +74,7 @@ Each command writes the order and sends the signed webhook Shopify would send, s
 
 Going live with Shopify:
 1. In the Shopify Dev Dashboard app for the US store, add the scopes `read_orders`, `read_customers` and `read_all_orders`. Request **protected customer data** access for name, email, phone and address; without it those fields come back empty.
-2. Set `SHOPIFY_MODE=live`, `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET` and `SHOPIFY_WEBHOOK_URL=https://factory.lakemat.com/api/webhooks/shopify` for both the Lambda and the worker.
+2. Set `shopify_mode = "live"` and `shopify_client_id` in the terraform repo's `production.tfvars` (it sets `SHOPIFY_WEBHOOK_URL` itself), and `SHOPIFY_CLIENT_SECRET` in the app secret.
 3. Restart the worker: it subscribes the webhooks (and puts back any Shopify dropped).
 4. Click **Pull orders** with a start date to import past orders.
 
@@ -83,25 +83,14 @@ Containers reinstall dependencies on start when `package-lock.json` changed (`sc
 Checks (run on the host after `npm install`): `npm test` (API tests on in-process Postgres) · `npm run typecheck` · `npm run lint`.
 
 ## Schema changes
-Edit `api/src/db/schema.ts` → `npm run db:generate -w api` → commit the new file in `api/drizzle/`. Docker compose applies migrations when the API starts; for production run `DATABASE_URL=<neon url> npm run db:migrate -w api`.
+Edit `api/src/db/schema.ts` → `npm run db:generate -w api` → commit the new file in `api/drizzle/`. Docker compose applies migrations when the API starts; staging and production get them from the deploy (below).
 
 ## Production setup (one time)
-1. **Neon**: create a project and copy the pooled connection string. Run the migrations against it (above).
-2. **Auth0**
-   - **APIs** → create *Lacey Factory API*, identifier `https://factory.lakemat.com/api` (RS256).
-   - **Applications** → create a *Single Page Application* "Lacey Factory".
-     - Allowed Callback URLs, Logout URLs and Web Origins: `https://factory.lakemat.com, https://staging.factory.lakemat.com, http://localhost:5173`
-     - Refresh Token Rotation: on. Grant the app access to the API above.
-     - Connections: **Google** (lakemat.com Workspace) + **Username-Password** with *Disable Sign Ups* on (create crew accounts by hand).
-   - **Actions → Post Login**: paste `auth0/post-login-action.js`; secrets `FACTORY_CLIENT_ID` (the SPA's client ID) and `ALLOWED_EMAILS`. Add it to the Login flow. It also puts email/name into the access token for the API.
-3. **AWS** (Terraform in `../terraform-lacey-factory`, account 493424762573):
-   - S3 bucket (private) for `web/dist`, served through CloudFront with Origin Access Control. A viewer-request CloudFront Function rewrites non-file paths to `/index.html` for client-side routing (don't use custom error responses — they would also rewrite API errors).
-   - Lambda (Node 22, handler `lambda.handler`) with a Function URL as a second CloudFront origin for `/api/*` (caching disabled, forward `Authorization`). Env vars: `DATABASE_URL`, `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `ALLOWED_EMAILS`, `NODE_ENV=production`. **Never** set `DEV_AUTH_EMAIL` (the handler refuses to start with it).
-   - Route 53 alias `factory.lakemat.com` (and `staging.factory.lakemat.com`) → the distribution, with an ACM certificate in us-east-1.
+1. **Neon**: create a project (and a `staging` branch) and copy each pooled connection string. They go into the app secret in step 3; the deploy runs the migrations.
+2. **Auth0**: one tenant per environment (staging and production), configured by Terraform in `../terraform-lacey-factory` (`auth0.tf`): the API `https://factory.lakemat.com/api`, the SPA, Google and `crew` (email + password, no sign-ups) connections, and the post-login action `auth0/post-login-action.js` there, which allows only `@lakemat.com` or `ALLOWED_EMAILS` and puts email/name into the access token for the API. Creating each tenant and its "Terraform" M2M app is a one-time step in its README. Crew accounts are created by hand (Users → Create user, connection `crew`). Local dev signs in against the staging tenant.
+3. **AWS**: everything (CloudFront, the API Lambda, the worker on ECS Fargate, buckets, DNS, certificate, the Secrets Manager secret and the GitHub deploy role) is Terraform in `../terraform-lacey-factory`; follow its README. Settings that aren't secret are in its `environments/<env>.tfvars`; secrets (`DATABASE_URL`, API keys) go in the `lacey-factory-<env>/app` secret, which the Lambda loads on cold start and ECS passes to the worker. The Lambda only answers requests that came through CloudFront (`x-origin-verify` header). **Never** set `DEV_AUTH_EMAIL` there (the handler refuses to start with it).
 4. **Supplier emails**
-   - **Google Cloud** (lakemat.com Workspace): enable the Gmail and Pub/Sub APIs. OAuth consent screen audience **Internal** (refresh tokens don't expire weekly), scope `gmail.readonly`. Create a *Web application* OAuth client with redirect URI `https://factory.lakemat.com/api/email/callback` (and `http://localhost:8787/api/email/callback` for local live mode). Create a Pub/Sub topic, give `gmail-api-push@system.gserviceaccount.com` *Pub/Sub Publisher* on it, and a **push** subscription to `https://factory.lakemat.com/api/webhooks/gmail` with OIDC authentication (audience = that URL).
-   - **Temporal Cloud**: create a namespace and an API key.
-   - **AWS**: a private S3 bucket for documents; an ECS Fargate service running `Dockerfile.worker` (0.25 vCPU / 512 MB is plenty) with S3 read/write on the bucket.
-   - **Env** — Lambda: add `GMAIL_MODE=live`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `APP_BASE_URL=https://factory.lakemat.com`, `GMAIL_PUBSUB_TOPIC`, `PUBSUB_MODE=push`, `PUBSUB_PUSH_AUDIENCE`, `EMAIL_TOKEN_KEY`, `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, `DOCUMENTS_BUCKET` (and S3 read on the bucket for "View document" links). Worker: the same minus the Pub/Sub push ones, plus `DATABASE_URL` and `ANTHROPIC_API_KEY`. Keep secrets in Secrets Manager.
-   - Then sign in as eric@lakemat.com and click **Connect Email**. The worker renews the Gmail watch daily (`renew-gmail-watch` schedule).
-5. **Deploy**: copy `deploy/example.env` to `deploy/<env>.env`, then `scripts/deploy.sh staging` (or `production`). It runs the tests, builds, updates the Lambda code, syncs the site to S3 and invalidates `index.html`.
+   - **Google Cloud** (lakemat.com Workspace): enable the Gmail and Pub/Sub APIs. OAuth consent screen audience **Internal** (refresh tokens don't expire weekly), scope `gmail.readonly`. Create a *Web application* OAuth client with redirect URIs `https://factory.lakemat.com/api/email/callback` and `http://localhost:8787/api/email/callback` (local live mode). Create a Pub/Sub topic, give `gmail-api-push@system.gserviceaccount.com` *Pub/Sub Publisher* on it, and a **push** subscription to `https://factory.lakemat.com/api/webhooks/gmail` with OIDC authentication (audience = that URL).
+   - **Temporal Cloud**: a namespace and API key per environment.
+   - Then sign in to production as eric@lakemat.com and click **Connect Email**. The worker renews the Gmail watch daily (`renew-gmail-watch` schedule). Only production connects: there is one Gmail watch, so staging runs Gmail in fake mode.
+5. **Deploy** (GitHub Actions, `.github/workflows/`): `ci.yml` typechecks, lints and tests every PR and push. `deploy.yml` deploys every push to `main` to **staging**; deploy **production** with *Actions → Deploy → Run workflow → production*. Both run `scripts/deploy.sh <env>`: build, migrations (`DATABASE_URL` from the secret), Lambda code, worker image (ECR, then an ECS redeploy), S3 sync and an `index.html` invalidation. Its settings are GitHub Environment variables set by `make github-vars ENV=<env>` in the terraform repo (including `VITE_AUTH0_*`). Migrations run before the new code is live, so they must not break the code that's still running (add first, drop in a later deploy). To deploy from a laptop instead, fill `deploy/<env>.env` from `deploy/example.env`.

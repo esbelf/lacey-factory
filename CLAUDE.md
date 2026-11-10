@@ -25,7 +25,8 @@ npm run build                        # api/dist/lambda.mjs + web/dist
 
 npm run db:generate -w api           # after editing api/src/db/schema.ts; commit api/drizzle/*
 npm run db:migrate -w api            # needs DATABASE_URL (compose runs this on api start)
-scripts/deploy.sh staging|production # test, build, update Lambda, sync S3, invalidate
+# Deploys run in GitHub Actions: push to main → staging; Actions → Deploy → production.
+scripts/deploy.sh staging|production # what CI runs: build, migrate, Lambda, worker image → ECS, S3 + invalidate
 ```
 
 `PUBSUB_MODE=pull` (live Gmail locally) reads the Pub/Sub service-account key from `~/.config/lacey-factory/pubsub-sa.json`, mounted into the api container at `/run/google` (override with `GOOGLE_CREDENTIALS_DIR`/`GOOGLE_CREDENTIALS_FILE`; lakemat.com blocks key creation, so point them at `~/.config/gcloud/application_default_credentials.json` from `gcloud auth application-default login`).
@@ -59,8 +60,8 @@ npm workspaces:
 
 **Auth and roles.**
 - The SPA logs in with `@auth0/auth0-react` (refresh tokens, localStorage cache) and sends the access token as a Bearer header.
-- The API verifies it with `jose` against Auth0's JWKS. Email, email_verified, and name come from custom claims under `https://factory.lakemat.com/`, which `auth0/post-login-action.js` adds.
-- The sign-in rule lives in two places that must agree: `api/src/lib/access.ts` (verified `@lakemat.com` email or one in `ALLOWED_EMAILS`) and the Auth0 action.
+- The API verifies it with `jose` against Auth0's JWKS. Email, email_verified, and name come from custom claims under `https://factory.lakemat.com/`, which the Auth0 post-login action adds (`../terraform-lacey-factory/auth0/post-login-action.js`).
+- The sign-in rule lives in two places that must agree: `api/src/lib/access.ts` (verified `@lakemat.com` email or one in `ALLOWED_EMAILS`) and the Auth0 action. Terraform passes one `allowed_emails` value to both.
 - Roles are `admin | regular | factory` in the `users` table. New users are auto-created as `factory` on their first request. `ADMIN_EMAIL` (eric@lakemat.com) is always admin, only `factory`/`regular` can be assigned, and the admin's own role can't be changed.
 - The permission table is in `shared/src/permissions.ts`. The API enforces it with `need()`. The web app calls `useCan()` only to hide UI. When you add a write route, choose its permission there.
 
@@ -95,7 +96,7 @@ npm workspaces:
 **Local dev auth bypass.**
 - `DEV_AUTH_EMAIL` (API, only when `NODE_ENV=development`) together with `VITE_DEV_AUTH=true` (web) skips Auth0.
 - An `x-dev-email` header, set by the "dev as" box in the nav, switches the user so you can test roles.
-- `lambda.ts` refuses to start if `DEV_AUTH_EMAIL` is set.
+- `lambda.ts` refuses to start if `DEV_AUTH_EMAIL` is set. On cold start it loads secrets from Secrets Manager (`APP_SECRETS_ARN`, `lambda-env.ts`), and it answers 403 to requests without CloudFront's `x-origin-verify` header (`ORIGIN_VERIFY_SECRET`).
 
 **Web data flow.**
 - `web/src/api.ts` builds a typed Hono RPC client from `AppType`. That's why `web/tsconfig.json` includes `node` types: it type-checks API sources.
@@ -104,5 +105,6 @@ npm workspaces:
 - `web/src/app.tsx` holds the routes. `Layout` loads `/api/me` before rendering any page, and a 403 there shows the "No access" page.
 
 ## Related
-- AWS infra (S3, CloudFront, Lambda, Route 53) belongs in `../terraform-lacey-factory`. That repo still points DNS at Vercel and needs updating for this architecture.
+- Auth0 (one tenant per environment: API, SPA, connections, post-login action) is in `../terraform-lacey-factory/auth0.tf`.
+- AWS infra (CloudFront, S3, Lambda, the ECS worker, ECR, Secrets Manager, Route 53, the GitHub deploy role) is in `../terraform-lacey-factory`, one workspace each for staging and production. Non-secret Lambda/worker env vars are set there (`local.app_env`), so a new env var the app needs in production must be added there too (or to the secret's keys).
 - The parent `../CLAUDE.md` covers the separate ecommerce storefront and Strapi CMS.
