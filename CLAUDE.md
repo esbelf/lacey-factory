@@ -105,6 +105,7 @@ npm workspaces:
 - `web/src/app.tsx` holds the routes. `Layout` loads `/api/me` before rendering any page, and a 403 there shows the "No access" page.
 
 ## Related
+- Neon (one project per environment; `DATABASE_URL` is written into the app secret) is in `../terraform-lacey-factory/neon.tf`.
 - Auth0 (one tenant per environment: API, SPA, connections, post-login action) is in `../terraform-lacey-factory/auth0.tf`.
 - AWS infra (CloudFront, S3, Lambda, the ECS worker, ECR, Secrets Manager, Route 53, the GitHub deploy role) is in `../terraform-lacey-factory`, one workspace each for staging and production. Non-secret Lambda/worker env vars are set there (`local.app_env`), so a new env var the app needs in production must be added there too (or to the secret's keys).
 - The parent `../CLAUDE.md` covers the separate ecommerce storefront and Strapi CMS.
