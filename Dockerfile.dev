@@ -2,6 +2,9 @@
 # docker-compose.yml. Source is bind-mounted; node_modules live in the image
 # (Linux builds of native deps like esbuild and Temporal's core-bridge, which needs glibc), not on the host.
 FROM node:24-bookworm-slim
+# Root certificates for Temporal's native client (TLS to Temporal Cloud); the slim image has none.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY shared/package.json shared/
