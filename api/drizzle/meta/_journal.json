@@ -71,6 +71,13 @@
       "when": 1794223677630,
       "tag": "0009_fabric_sewing_cost",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794390837558,
+      "tag": "0010_rename_kayak_medium_6x6",
+      "breakpoints": true
     }
   ]
 }

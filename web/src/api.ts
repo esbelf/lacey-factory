@@ -89,7 +89,7 @@ export async function documentFileUrl(id: string): Promise<string> {
 }
 
 type Reads = typeof reads;
-type ReadData<K extends keyof Reads> = Exclude<Awaited<ReturnType<Awaited<ReturnType<Reads[K]>>["json"]>>, { error: string }>;
+export type ReadData<K extends keyof Reads> = Exclude<Awaited<ReturnType<Awaited<ReturnType<Reads[K]>>["json"]>>, { error: string }>;
 
 /** useQuery for one of the list endpoints, keyed by name. */
 export function useApi<K extends keyof Reads>(

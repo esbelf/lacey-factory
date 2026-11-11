@@ -29,7 +29,7 @@ x-api-env: &api-env
   DOCUMENTS_BUCKET: ${DOCUMENTS_BUCKET:-lacey-factory-documents-local}
   AWS_REGION: ${AWS_REGION:-us-east-2}
   AWS_ENDPOINT_URL: http://localstack:4566
-  AWS_PUBLIC_ENDPOINT_URL: ${AWS_PUBLIC_ENDPOINT_URL:-http://localhost:4566}
+  AWS_PUBLIC_ENDPOINT_URL: ${AWS_PUBLIC_ENDPOINT_URL:-http://localhost:${LOCALSTACK_PORT:-4566}}
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
   # "fake" reads emails written by `npm run simulate`; "live" uses real Gmail.
@@ -91,8 +91,12 @@ services:
 
   localstack:
     image: localstack/localstack:2026.10.4
+    # LocalStack quits (exit 55) if its online license check fails, e.g. a brief
+    # network blip at startup. Restart until it gets through.
+    restart: on-failure
     ports:
-      - "4566:4566"
+      # Set LOCALSTACK_PORT in .env if another project's LocalStack already has 4566.
+      - "${LOCALSTACK_PORT:-4566}:4566"
     environment:
       LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:?Set LOCALSTACK_AUTH_TOKEN in .env (free account at localstack.cloud)}
       SERVICES: s3

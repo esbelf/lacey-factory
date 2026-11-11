@@ -9,7 +9,7 @@ Stack: React + Vite SPA (S3 + CloudFront) → Hono API (AWS Lambda behind the sa
 ## Commands
 
 ```bash
-docker compose up --build            # everything locally: db, temporal (UI :8233), localstack S3 :4566, api :8787, worker, web :5173 (needs LOCALSTACK_AUTH_TOKEN)
+docker compose up --build            # everything locally: db, temporal (UI :8233), localstack S3 :4566 (LOCALSTACK_PORT), api :8787, worker, web :5173 (needs LOCALSTACK_AUTH_TOKEN)
 docker compose exec api npm run simulate -- hanes   # fake supplier email (GMAIL_MODE=fake)
 docker compose exec api npm run simulate:amazon -- us   # fake Amazon order + sync (AMAZON_MODE=fake); ca, pending, cancel, unknown-sku…
 docker compose exec api npm run simulate:shopify -- mi  # fake Shopify order + signed webhook (SHOPIFY_MODE=fake); repeat, guest, on, bc, pending, pay, refund…

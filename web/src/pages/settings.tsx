@@ -1,7 +1,7 @@
 import { formatFeet } from "@lacey-factory/shared/feet";
 import { useSearchParams } from "react-router";
 
-import { patch, post, useApi } from "../api";
+import { patch, post, useApi, type ReadData } from "../api";
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { Loading } from "../components/loading";
 import { ChannelSkusCard } from "../components/channel-skus-card";
@@ -123,110 +123,12 @@ export function SettingsPage() {
         )}
 
         {tab === "sizes" && (
-          <div className={twoColumns}>
-            <Card title="Cut sizes">
-              {sizes.length === 0 ? (
-                <Empty>No sizes yet.</Empty>
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {sizes.map(({ size, materialName }) => (
-                    <li key={size.id} className="rounded-lg border border-line p-3">
-                      <ActionForm action={patch(`/api/cut-sizes/${size.id}`)} className="flex flex-wrap items-end gap-3">
-                        <div className="min-w-32">
-                          <div className="text-lg font-semibold">{size.label}</div>
-                          <div className="text-sm text-muted">
-                            {materialName} · {formatFeet(size.widthFt)} wide
-                          </div>
-                          <div className="text-sm text-muted">
-                            {size.requiresSewing ? "Gets sewn" : "Not sewn — cuts go straight to inventory"}
-                          </div>
-                          {!size.active && (
-                            <div className="text-sm font-semibold text-danger">
-                              Off — enter the cut length (with hems), tick Active, Save
-                            </div>
-                          )}
-                        </div>
-                        <Field label="Cut length (ft)">
-                          <Input
-                            name="cutLengthFt"
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            defaultValue={size.cutLengthFt}
-                            className="w-28"
-                            required
-                          />
-                        </Field>
-                        <Field label="Used for">
-                          <Input name="productFamily" defaultValue={size.productFamily ?? ""} className="w-48" />
-                        </Field>
-                        <Field label="Order">
-                          <Input name="sortOrder" type="number" step="1" defaultValue={size.sortOrder} className="w-20" />
-                        </Field>
-                        <label className="flex h-11 items-center gap-2">
-                          <input type="checkbox" name="active" defaultChecked={size.active} className="h-5 w-5" /> Active
-                        </label>
-                        <label className="flex h-11 items-center gap-2">
-                          <input type="checkbox" name="requiresSewing" defaultChecked={size.requiresSewing} className="h-5 w-5" /> Gets sewn
-                        </label>
-                        <SubmitButton variant="secondary">Save</SubmitButton>
-                      </ActionForm>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="mt-3 text-sm text-muted">
-                Changing a cut length only affects future cuts. Unticking "Gets sewn" moves that size's pieces waiting to be
-                sewn into inventory.
-              </p>
-            </Card>
-            <Card title="Add cut size">
-              {materials.length === 0 ? (
-                <p className="text-muted">Add a material first.</p>
-              ) : (
-                <ActionForm action={post("/api/cut-sizes")} resetOnSuccess className="flex flex-col gap-3">
-                  <Field label="Material">
-                    <Select name="materialId" required>
-                      {materials
-                        .filter((m) => m.active)
-                        .map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name}
-                          </option>
-                        ))}
-                    </Select>
-                  </Field>
-                  <Field label="Label" hint="How the crew calls it, e.g. 12x24">
-                    <Input name="label" required />
-                  </Field>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label="Width (ft)">
-                      <Input name="widthFt" type="number" step="0.01" min="0" inputMode="decimal" required />
-                    </Field>
-                    <Field label="Cut length (ft)" hint="Off the roll, e.g. 26">
-                      <Input name="cutLengthFt" type="number" step="0.01" min="0" inputMode="decimal" required />
-                    </Field>
-                  </div>
-                  <Field label="Used for">
-                    <Input name="productFamily" placeholder="e.g. LakeMat / MuckMat XL" />
-                  </Field>
-                  <Field label="Order">
-                    <Input name="sortOrder" type="number" step="1" defaultValue={0} />
-                  </Field>
-                  <Field label="Sewing">
-                    <Select name="sewing" defaultValue="">
-                      <option value="">Same as the material</option>
-                      <option value="sewn">Gets sewn</option>
-                      <option value="not_sewn">Not sewn — straight to inventory</option>
-                    </Select>
-                  </Field>
-                  <div>
-                    <SubmitButton>Add size</SubmitButton>
-                  </div>
-                </ActionForm>
-              )}
-            </Card>
-          </div>
+          <SizesTab
+            materials={materials}
+            sizes={sizes}
+            materialParam={params.get("material")}
+            onMaterial={(id) => setParams({ tab: "sizes", material: id }, { replace: true })}
+          />
         )}
 
         {tab === "products" && <ProductsCard products={products} steelItems={steelItems} canEdit={can("settings")} />}
@@ -234,6 +136,151 @@ export function SettingsPage() {
         {tab === "boxes" && <SteelItemsCard items={steelItems} kind="box" />}
         {tab === "suppliers" && <SuppliersCard materials={materials} steelItems={steelItems} />}
         {tab === "skus" && skusQ.data && <ChannelSkusCard skus={skusQ.data} products={products} />}
+      </div>
+    </>
+  );
+}
+
+type Material = ReadData<"materials">[number];
+type SizeRow = ReadData<"cutSizes">[number];
+
+function SizesTab({
+  materials,
+  sizes,
+  materialParam,
+  onMaterial,
+}: {
+  materials: Material[];
+  sizes: SizeRow[];
+  materialParam: string | null;
+  onMaterial: (id: string) => void;
+}) {
+  // One sub-tab per material that has sizes or can get new ones.
+  const shown = materials.filter((m) => m.active || sizes.some((s) => s.size.materialId === m.id));
+  if (shown.length === 0) {
+    return (
+      <Card title="Cut sizes">
+        <p className="text-muted">Add a material first.</p>
+      </Card>
+    );
+  }
+  const material = shown.find((m) => m.id === materialParam) ?? shown[0];
+  const materialSizes = sizes.filter((s) => s.size.materialId === material.id);
+
+  return (
+    <>
+      <div role="tablist" aria-label="Materials" className="mb-4 flex flex-wrap gap-2">
+        {shown.map((m) => {
+          const count = sizes.filter((s) => s.size.materialId === m.id).length;
+          const selected = m.id === material.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => onMaterial(m.id)}
+              className={`rounded-full border px-4 py-1.5 font-semibold ${
+                selected ? "border-brand bg-brand text-white" : "border-line text-muted hover:text-ink"
+              } ${m.active ? "" : "opacity-60"}`}
+            >
+              {m.name} <span className={selected ? "opacity-80" : "text-muted"}>({count})</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="grid items-start gap-4 lg:grid-cols-[1fr_24rem]">
+        <Card title={`${material.name} cut sizes`}>
+          {materialSizes.length === 0 ? (
+            <Empty>No sizes for {material.name} yet.</Empty>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {materialSizes.map(({ size }) => (
+                <li key={size.id} className="rounded-lg border border-line p-3">
+                  <ActionForm action={patch(`/api/cut-sizes/${size.id}`)} className="flex flex-wrap items-end gap-3">
+                    <div className="min-w-32">
+                      <div className="text-lg font-semibold">{size.label}</div>
+                      <div className="text-sm text-muted">{formatFeet(size.widthFt)} wide</div>
+                      <div className="text-sm text-muted">
+                        {size.requiresSewing ? "Gets sewn" : "Not sewn — cuts go straight to inventory"}
+                      </div>
+                      {!size.active && (
+                        <div className="text-sm font-semibold text-danger">
+                          Off — enter the cut length (with hems), tick Active, Save
+                        </div>
+                      )}
+                    </div>
+                    <Field label="Cut length (ft)">
+                      <Input
+                        name="cutLengthFt"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        defaultValue={size.cutLengthFt}
+                        className="w-28"
+                        required
+                      />
+                    </Field>
+                    <Field label="Used for">
+                      <Input name="productFamily" defaultValue={size.productFamily ?? ""} className="w-48" />
+                    </Field>
+                    <Field label="Order">
+                      <Input name="sortOrder" type="number" step="1" defaultValue={size.sortOrder} className="w-20" />
+                    </Field>
+                    <label className="flex h-11 items-center gap-2">
+                      <input type="checkbox" name="active" defaultChecked={size.active} className="h-5 w-5" /> Active
+                    </label>
+                    <label className="flex h-11 items-center gap-2">
+                      <input type="checkbox" name="requiresSewing" defaultChecked={size.requiresSewing} className="h-5 w-5" /> Gets sewn
+                    </label>
+                    <SubmitButton variant="secondary">Save</SubmitButton>
+                  </ActionForm>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 text-sm text-muted">
+            Changing a cut length only affects future cuts. Unticking "Gets sewn" moves that size's pieces waiting to be
+            sewn into inventory.
+          </p>
+        </Card>
+        <Card title={`Add ${material.name} size`}>
+          {!material.active ? (
+            <p className="text-muted">{material.name} is turned off. Turn it on under Materials to add sizes.</p>
+          ) : (
+            <ActionForm action={post("/api/cut-sizes")} resetOnSuccess className="flex flex-col gap-3">
+              <input type="hidden" name="materialId" value={material.id} />
+              <Field label="Label" hint="How the crew calls it, e.g. 12x24">
+                <Input name="label" required />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Width (ft)">
+                  <Input name="widthFt" type="number" step="0.01" min="0" inputMode="decimal" required />
+                </Field>
+                <Field label="Cut length (ft)" hint="Off the roll, e.g. 26">
+                  <Input name="cutLengthFt" type="number" step="0.01" min="0" inputMode="decimal" required />
+                </Field>
+              </div>
+              <Field label="Used for">
+                <Input name="productFamily" placeholder="e.g. LakeMat / MuckMat XL" />
+              </Field>
+              <Field label="Order">
+                <Input name="sortOrder" type="number" step="1" defaultValue={0} />
+              </Field>
+              <Field label="Sewing">
+                <Select name="sewing" defaultValue="">
+                  <option value="">Same as the material</option>
+                  <option value="sewn">Gets sewn</option>
+                  <option value="not_sewn">Not sewn — straight to inventory</option>
+                </Select>
+              </Field>
+              <div>
+                <SubmitButton>Add size</SubmitButton>
+              </div>
+            </ActionForm>
+          )}
+        </Card>
       </div>
     </>
   );
