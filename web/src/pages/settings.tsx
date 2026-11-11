@@ -55,6 +55,7 @@ export function SettingsPage() {
       sections: [
         { id: "steel", label: "Steel poles", count: steelItems.filter((i) => i.kind === "steel").length },
         { id: "boxes", label: "Boxes", count: steelItems.filter((i) => i.kind === "box").length },
+        { id: "parts", label: "Parts", count: steelItems.filter((i) => i.kind === "part").length },
       ],
     },
     { label: "Who invoices us", sections: [{ id: "suppliers", label: "Suppliers", count: suppliersQ.data?.length }] },
@@ -99,6 +100,7 @@ export function SettingsPage() {
             {tab === "products" && <ProductsCard products={products} steelItems={steelItems} canEdit={can("settings")} />}
             {tab === "steel" && <SteelItemsCard items={steelItems} />}
             {tab === "boxes" && <SteelItemsCard items={steelItems} kind="box" />}
+            {tab === "parts" && <SteelItemsCard items={steelItems} kind="part" />}
             {tab === "suppliers" && <SuppliersCard materials={materials} steelItems={steelItems} />}
             {tab === "skus" && skusQ.data && <ChannelSkusCard skus={skusQ.data} products={products} />}
           </div>

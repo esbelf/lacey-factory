@@ -22,11 +22,11 @@ beforeAll(async () => {
 
 describe("LakeMat catalog", () => {
   it("adds the four materials, 30 sizes, 44 products and 12 boxes", async () => {
-    expect(await loadCatalog(db)).toEqual({ materials: 4, sizes: 30, products: 44, components: 18, suppliers: 1, boxes: 12 });
+    expect(await loadCatalog(db)).toEqual({ materials: 4, sizes: 30, products: 44, components: 18, suppliers: 1, boxes: 12, parts: 3 });
   });
 
   it("adds nothing the second time", async () => {
-    expect(await loadCatalog(db)).toEqual({ materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0, boxes: 0 });
+    expect(await loadCatalog(db)).toEqual({ materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0, boxes: 0, parts: 0 });
   });
 
   it("gives every product its SKU, box and packed weight, without overwriting edits", async () => {

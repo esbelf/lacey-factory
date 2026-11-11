@@ -263,6 +263,7 @@ export async function listProducts(db: DB) {
     uses: { qty: number; label: string; material: string }[];
     steel: Part[];
     box: Part | null;
+    parts: Part[];
   };
   const byId = new Map<string, Entry>();
   for (const r of rows) {
@@ -276,6 +277,7 @@ export async function listProducts(db: DB) {
         uses: [],
         steel: parts.filter((s) => s.kind === "steel").map(part),
         box: box ? part(box) : null,
+        parts: parts.filter((s) => s.kind === "part").map(part),
       };
       byId.set(r.product.id, entry);
     }

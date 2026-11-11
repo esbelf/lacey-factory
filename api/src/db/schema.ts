@@ -379,11 +379,11 @@ export const supplierDocuments = pgTable(
 
 // ───────────── Steel ─────────────
 
-/** A kind of steel pole we stock, counted by the piece. */
-export const stockItemKind = pgEnum("stock_item_kind", ["steel", "box"]);
+/** What a stocked-by-the-piece item is: a steel pole, a shipping box, or a part (stakes, zip ties, clips). */
+export const stockItemKind = pgEnum("stock_item_kind", ["steel", "box", "part"]);
 
 /**
- * Parts we stock by the piece at FIFO cost: steel and shipping boxes (`kind`).
+ * Items we stock by the piece at FIFO cost: steel, shipping boxes and parts (`kind`).
  * Both use steel_lots / steel_usage / product_steel the same way.
  */
 export const steelItems = pgTable(
@@ -491,6 +491,8 @@ export const sales = pgTable(
     steelCost: money("steel_cost").notNull().default(0),
     /** Shipping box cost (FIFO landed cost). */
     boxCost: money("box_cost").notNull().default(0),
+    /** Stakes, zip ties and clips cost (FIFO, entered by hand). */
+    partsCost: money("parts_cost").notNull().default(0),
     /** Fabric cost: each piece's share of its roll's price (oldest pieces first). */
     fabricCost: money("fabric_cost").notNull().default(0),
     /** True when a piece's roll has no price yet (or none to estimate from); filled in when one is set. */

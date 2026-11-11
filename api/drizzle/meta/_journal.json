@@ -85,6 +85,13 @@
       "when": 1794396031222,
       "tag": "0011_box_suppliers",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794408360092,
+      "tag": "0012_parts",
+      "breakpoints": true
     }
   ]
 }

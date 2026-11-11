@@ -130,6 +130,9 @@ export const CATALOG_SUPPLIERS = [
   },
 ];
 
+/** Parts stocked by the piece and added by hand (never invoiced). */
+export const CATALOG_PARTS = ["Stakes", "Zip ties", "Clips"];
+
 /** Shipping boxes (from Eric, 2026-11-05). Outside size in inches. */
 export const CATALOG_BOXES: { name: string; lengthIn: number; widthIn: number; heightIn: number }[] = [
   { name: "LAKEMAT BOX", lengthIn: 58, widthIn: 14, heightIn: 8 },

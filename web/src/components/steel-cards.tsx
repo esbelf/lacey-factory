@@ -25,6 +25,13 @@ const COPY: Record<Kind, { title: string; intro: string; empty: string; add: str
     add: "box",
     placeholder: "e.g. LAKEMAT BOX",
   },
+  part: {
+    title: "Parts",
+    intro: "Stakes, zip ties and clips, counted by the piece. They aren't invoiced: add stock under Inventory → Adjust.",
+    empty: "No parts yet. Load the LakeMat catalog to add stakes, zip ties and clips.",
+    add: "part",
+    placeholder: "e.g. Stakes",
+  },
 };
 
 function SizeFields({ item }: { item?: StockItem }) {
@@ -124,6 +131,7 @@ function productGroup(productLine: string) {
 export function ProductsCard({ products, steelItems, canEdit }: { products: Product[]; steelItems: StockItem[]; canEdit: boolean }) {
   const steel = steelItems.filter((i) => i.active && i.kind === "steel");
   const boxes = steelItems.filter((i) => i.kind === "box" && i.active);
+  const partItems = steelItems.filter((i) => i.kind === "part" && i.active);
   const [params, setParams] = useSearchParams();
   const hasOther = products.some((p) => productGroup(p.product.productLine) === "other");
   const groups = hasOther ? [...PRODUCT_GROUPS, { id: "other", label: "Other", lines: [] }] : PRODUCT_GROUPS;
@@ -157,7 +165,7 @@ export function ProductsCard({ products, steelItems, canEdit }: { products: Prod
             </div>
           ) : (
             <ul className="divide-y divide-line">
-              {shown.map(({ product, uses, steel: parts, box }) => (
+              {shown.map(({ product, uses, steel: poles, parts, box }) => (
                 <EditableRow
                   key={product.id}
                   canEdit={canEdit}
@@ -197,26 +205,8 @@ export function ProductsCard({ products, steelItems, canEdit }: { products: Prod
                             <SubmitButton variant="secondary">Set box</SubmitButton>
                           </ActionForm>
                         )}
-                        {steel.length > 0 && (
-                          <ActionForm action={post(`/api/products/${product.id}/steel`)} resetOnSuccess className={controlRow}>
-                            <Field label="Pole">
-                              <Select name="steelItemId" required defaultValue="" className="w-56">
-                                <option value="" disabled>
-                                  Pick a pole…
-                                </option>
-                                {steel.map((i) => (
-                                  <option key={i.id} value={i.id}>
-                                    {i.name}
-                                  </option>
-                                ))}
-                              </Select>
-                            </Field>
-                            <Field label="Per product" hint="0 removes it">
-                              <Input name="qty" type="number" step="1" min="0" inputMode="numeric" className="w-24" required />
-                            </Field>
-                            <SubmitButton variant="secondary">Set poles</SubmitButton>
-                          </ActionForm>
-                        )}
+                        <PieceForm productId={product.id} items={steel} label="Pole" button="Set poles" />
+                        <PieceForm productId={product.id} items={partItems} label="Part" button="Set parts" />
                       </div>
                     </div>
                   )}
@@ -225,22 +215,15 @@ export function ProductsCard({ products, steelItems, canEdit }: { products: Prod
                     <span className="font-semibold">{product.name}</span>
                     {product.sku && <span className="text-sm text-muted tabular-nums">{product.sku}</span>}
                   </div>
-                  <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-[1.3fr_1.2fr_1.2fr_0.6fr_1.5fr]">
+                  <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-[1.3fr_1.2fr_1fr_1.1fr_0.6fr_1.5fr]">
                     <Fact label="Fabric">
                       {uses.length ? uses.map((u) => `${u.qty > 1 ? `${u.qty} × ` : ""}${u.material} ${u.label}`).join(" + ") : <span className="text-muted">None</span>}
                     </Fact>
                     <Fact label="Steel" wrap>
-                      {parts.length ? (
-                        <ul>
-                          {parts.map((s) => (
-                            <li key={s.steelItemId} className="tabular-nums">
-                              {s.qty} × {s.name}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <span className="text-muted">None</span>
-                      )}
+                      <PieceList items={poles} />
+                    </Fact>
+                    <Fact label="Parts" wrap>
+                      <PieceList items={parts} />
                     </Fact>
                     <Fact label="Box">{box ? box.name : <span className="font-semibold text-danger">Not set</span>}</Fact>
                     <Fact label="Packed">
@@ -263,5 +246,44 @@ export function ProductsCard({ products, steelItems, canEdit }: { products: Prod
         </>
       )}
     </>
+  );
+}
+
+/** "3 × name" per line, or None. */
+function PieceList({ items }: { items: { steelItemId: string; qty: number; name: string }[] }) {
+  if (!items.length) return <span className="text-muted">None</span>;
+  return (
+    <ul>
+      {items.map((s) => (
+        <li key={s.steelItemId} className="tabular-nums">
+          {s.qty} × {s.name}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Sets how many of a pole or part one product uses; 0 removes it. */
+function PieceForm({ productId, items, label, button }: { productId: string; items: StockItem[]; label: string; button: string }) {
+  if (items.length === 0) return null;
+  return (
+    <ActionForm action={post(`/api/products/${productId}/steel`)} resetOnSuccess className={controlRow}>
+      <Field label={label}>
+        <Select name="steelItemId" required defaultValue="" className="w-56">
+          <option value="" disabled>
+            Pick a {label.toLowerCase()}…
+          </option>
+          {items.map((i) => (
+            <option key={i.id} value={i.id}>
+              {i.name}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <Field label="Per product" hint="0 removes it">
+        <Input name="qty" type="number" step="1" min="0" inputMode="numeric" className="w-24" required />
+      </Field>
+      <SubmitButton variant="secondary">{button}</SubmitButton>
+    </ActionForm>
   );
 }

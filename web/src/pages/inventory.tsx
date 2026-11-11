@@ -90,6 +90,7 @@ export function InventoryPage() {
 
       <StockTable items={steelQ.data.items} kind="steel" />
       <StockTable items={steelQ.data.items} kind="box" />
+      <StockTable items={steelQ.data.items} kind="part" />
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         {can("sales:record") && <RecordSale products={productsQ.data} />}
@@ -171,20 +172,27 @@ export function InventoryPage() {
 
 type StockItem = SteelData["items"][number];
 
-function StockTable({ items, kind }: { items: StockItem[]; kind: "steel" | "box" }) {
+const STOCK_COPY = {
+  steel: { title: "Steel poles", one: "Pole", per: "pole", empty: "No steel items yet. Add them under Settings → Steel poles." },
+  box: { title: "Shipping boxes", one: "Box", per: "box", empty: "No boxes yet. Load the catalog or add them under Settings → Boxes." },
+  part: { title: "Parts", one: "Part", per: "each", empty: "No parts yet. Load the catalog or add them under Settings → Parts." },
+} as const;
+
+function StockTable({ items, kind }: { items: StockItem[]; kind: StockItem["kind"] }) {
   const shown = items.filter((i) => i.kind === kind && (i.active || i.onHand !== 0));
   const box = kind === "box";
+  const c = STOCK_COPY[kind];
   return (
-    <Card title={box ? "Shipping boxes" : "Steel poles"} className="mt-6">
+    <Card title={c.title} className="mt-6">
       {shown.length === 0 ? (
-        <Empty>{box ? "No boxes yet. Load the catalog or add them under Settings → Boxes." : "No steel items yet. Add them under Settings → Steel poles."}</Empty>
+        <Empty>{c.empty}</Empty>
       ) : (
         <Table>
           <thead>
             <tr>
-              <th>{box ? "Box" : "Pole"}</th>
+              <th>{c.one}</th>
               {box && <th>Size</th>}
-              <th className="text-right">Latest cost / {box ? "box" : "pole"}</th>
+              <th className="text-right">Latest cost / {c.per}</th>
               <th className="text-right">Value on hand</th>
               <th className="text-right">On hand</th>
             </tr>
@@ -323,22 +331,22 @@ function RecentSales({ sales, canUndo }: { sales: SaleRow[]; canUndo: boolean })
 function AdjustSteel({ items }: { items: SteelData["items"] }) {
   const active = items.filter((i) => i.active);
   return (
-    <Card title="Adjust steel & boxes">
+    <Card title="Adjust steel, boxes & parts">
       <p className="mb-3 text-sm text-muted">
         For the opening count and corrections after a physical count. Adding needs the cost of each one; removing takes
         from the oldest first.
       </p>
       {active.length === 0 ? (
-        <p className="text-muted">Add steel items or boxes under Settings first.</p>
+        <p className="text-muted">Add steel items, boxes or parts under Settings first.</p>
       ) : (
         <ActionForm action={post("/api/steel/adjustments")} resetOnSuccess className="grid gap-3 sm:grid-cols-2">
           <Field label="Item">
             <Select name="steelItemId" required defaultValue="">
               <option value="" disabled>
-                Pick a pole or box
+                Pick a pole, box or part
               </option>
-              {(["steel", "box"] as const).map((kind) => (
-                <optgroup key={kind} label={kind === "box" ? "Boxes" : "Steel"}>
+              {(["steel", "box", "part"] as const).map((kind) => (
+                <optgroup key={kind} label={{ steel: "Steel", box: "Boxes", part: "Parts" }[kind]}>
                   {active
                     .filter((i) => i.kind === kind)
                     .map((i) => (

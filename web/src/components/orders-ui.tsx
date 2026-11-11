@@ -142,13 +142,13 @@ export function SkuLinkForm({
 export function CostLine({
   c,
 }: {
-  c: { steelCost: number | null; boxCost: number | null; fabricCost: number | null; sewingCost: number | null; short?: boolean | null; costMissing?: boolean | null };
+  c: { steelCost: number | null; boxCost: number | null; partsCost: number | null; fabricCost: number | null; sewingCost: number | null; short?: boolean | null; costMissing?: boolean | null };
 }) {
-  const parts = [c.steelCost, c.boxCost, c.fabricCost, c.sewingCost].map((n) => n ?? 0);
+  const parts = [c.steelCost, c.boxCost, c.partsCost, c.fabricCost, c.sewingCost].map((n) => n ?? 0);
   return (
     <>
       COGS <span className="font-semibold">{formatMoney(sumMoney(parts))}</span> = steel {formatMoney(c.steelCost)} · box{" "}
-      {formatMoney(c.boxCost)} · fabric {formatMoney(c.fabricCost)} · sewing {formatMoney(c.sewingCost)}
+      {formatMoney(c.boxCost)} · parts {formatMoney(c.partsCost)} · fabric {formatMoney(c.fabricCost)} · sewing {formatMoney(c.sewingCost)}
       {c.short && <span className="ml-1 font-semibold text-danger">· steel short</span>}
       {c.costMissing && <span className="ml-1 font-semibold text-danger">· some costs not set</span>}
     </>

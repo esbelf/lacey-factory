@@ -26,6 +26,7 @@ export const stockKindFor = (supplierKind: string): StockKind => (supplierKind =
 const WORDS = {
   steel: { one: "pole", many: "poles", item: "steel item", lines: "steel", stock: "steel inventory" },
   box: { one: "box", many: "boxes", item: "box", lines: "box", stock: "box inventory" },
+  part: { one: "part", many: "parts", item: "part", lines: "part", stock: "parts inventory" },
 } as const;
 export const stockWords = (kind: StockKind) => WORDS[kind];
 
@@ -174,7 +175,7 @@ async function refreshSaleCost(tx: Tx, saleId: string) {
     sumMoney(rows.filter((r) => r.kind === kind).map((r) => mulMoney(r.usage.qty, r.usage.landedUnitCost)));
   await tx
     .update(sales)
-    .set({ steelCost: cost("steel"), boxCost: cost("box"), short: rows.some((r) => r.usage.lotId === null) })
+    .set({ steelCost: cost("steel"), boxCost: cost("box"), partsCost: cost("part"), short: rows.some((r) => r.usage.lotId === null) })
     .where(eq(sales.id, saleId));
 }
 
@@ -381,7 +382,7 @@ export async function adjustSteel(
   if (!Number.isInteger(input.qty) || input.qty === 0) throw new UserError("Change must be a whole number other than 0.");
   if (input.qty < 0 && input.reason === "opening_balance") throw new UserError("An opening balance can't be negative.");
   if (input.qty > 0 && (input.unitCost == null || input.unitCost < 0)) {
-    throw new UserError("Enter the cost per pole for poles you're adding.");
+    throw new UserError("Enter the cost of each one you're adding.");
   }
   await db.transaction(async (tx) => {
     await lockItems(tx, [input.steelItemId]);
@@ -414,7 +415,7 @@ export async function adjustSteel(
 export type StockKind = (typeof steelItems.$inferSelect)["kind"];
 type Dimensions = { lengthIn?: number | null; widthIn?: number | null; heightIn?: number | null };
 
-const itemWord = (kind: StockKind) => (kind === "box" ? "box" : "steel item");
+const itemWord = (kind: StockKind) => WORDS[kind].item;
 
 async function checkName(db: DB, name: string, kind: StockKind, id?: string) {
   if (!name) throw new UserError("Name is required.");

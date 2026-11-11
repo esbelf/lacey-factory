@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 
 import {
   CATALOG_BOXES,
+  CATALOG_PARTS,
   CATALOG_MATERIALS,
   CATALOG_PRODUCTS,
   CATALOG_PRODUCTS_WITHOUT_RECIPE,
@@ -18,6 +19,7 @@ export type CatalogResult = {
   components: number;
   suppliers: number;
   boxes: number;
+  parts: number;
 };
 
 /**
@@ -28,7 +30,7 @@ export type CatalogResult = {
  */
 export async function loadCatalog(db: DB): Promise<CatalogResult> {
   return db.transaction(async (tx) => {
-    const added: CatalogResult = { materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0, boxes: 0 };
+    const added: CatalogResult = { materials: 0, sizes: 0, products: 0, components: 0, suppliers: 0, boxes: 0, parts: 0 };
     const sizeId = new Map<string, string>(); // "material|label" → id
 
     for (const m of CATALOG_MATERIALS) {
@@ -120,6 +122,16 @@ export async function loadCatalog(db: DB): Promise<CatalogResult> {
         added.boxes++;
       }
       boxId.set(b.name, row.id);
+    }
+
+    // Stakes, zip ties and clips.
+    for (const [i, name] of CATALOG_PARTS.entries()) {
+      const inserted = await tx
+        .insert(steelItems)
+        .values({ name, kind: "part", sortOrder: i + 1 })
+        .onConflictDoNothing()
+        .returning({ id: steelItems.id });
+      added.parts += inserted.length;
     }
 
     // SKU, weight and box: filled in only where still empty, so Settings edits stay.

@@ -274,7 +274,7 @@ export function createApp(deps: AppDeps) {
         z.object({
           name: z.string().min(1, "Name is required."),
           sortOrder: z.coerce.number().int().default(0),
-          kind: z.enum(["steel", "box"]).default("steel"),
+          kind: z.enum(["steel", "box", "part"]).default("steel"),
           ...boxSize,
         }),
       );
@@ -312,12 +312,12 @@ export function createApp(deps: AppDeps) {
     })
     .post("/catalog/load", need("settings"), async (c) => {
       const r = await loadCatalog(c.var.db);
-      if (r.materials + r.sizes + r.products + r.components + r.suppliers + r.boxes === 0) {
+      if (r.materials + r.sizes + r.products + r.components + r.suppliers + r.boxes + r.parts === 0) {
         return ok(c, "Catalog already loaded — nothing to add.");
       }
       return ok(
         c,
-        `Added ${r.materials} materials, ${r.sizes} sizes (switched off until cut length is set), ${r.products} products, ${r.boxes} boxes` +
+        `Added ${r.materials} materials, ${r.sizes} sizes (switched off until cut length is set), ${r.products} products, ${r.boxes} boxes, ${r.parts} parts` +
           (r.suppliers ? `, ${r.suppliers} supplier (add its email addresses under Suppliers).` : "."),
       );
     })

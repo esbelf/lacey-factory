@@ -293,7 +293,7 @@ describe("steel inventory and sales", () => {
   });
 
   it("manual steel changes need a cost to add and can't go below zero", async () => {
-    await expect(adjustSteel(db, ME, { steelItemId: large, qty: 5, reason: "opening_balance", adjustedOn: "2026-10-12" })).rejects.toThrow(/cost per pole/);
+    await expect(adjustSteel(db, ME, { steelItemId: large, qty: 5, reason: "opening_balance", adjustedOn: "2026-10-12" })).rejects.toThrow(/cost of each one/);
     await expect(adjustSteel(db, ME, { steelItemId: large, qty: -21, reason: "count_correction", adjustedOn: "2026-10-12" })).rejects.toThrow(/Only 20 on hand/);
     await adjustSteel(db, ME, { steelItemId: large, qty: -2, reason: "count_correction", adjustedOn: "2026-10-12", note: "Bent" });
     expect((await item(large)).onHand).toBe(18);
