@@ -18,7 +18,7 @@ import { getDocument, putDocument } from "./storage";
 import { createActivities } from "./temporal/activities";
 import { temporalClient, connectionOptions } from "./temporal/client";
 import { ClaudeDocumentReader } from "./temporal/extract";
-import { AMAZON_SCHEDULE_ID, RENEW_SCHEDULE_ID, WORKFLOWS } from "./temporal/names";
+import { AMAZON_SCHEDULE_ID, RENEW_SCHEDULE_ID, STOCK_ALERT_SCHEDULE_ID, WORKFLOWS } from "./temporal/names";
 
 if (process.env.DEV_AUTH_EMAIL && process.env.NODE_ENV !== "development") {
   throw new Error("DEV_AUTH_EMAIL must never be set outside local development.");
@@ -35,6 +35,22 @@ async function ensureRenewSchedule() {
       policies: { overlap: ScheduleOverlapPolicy.SKIP },
     });
     console.log("Created the daily Gmail watch renewal schedule.");
+  } catch (err) {
+    if (!(err instanceof ScheduleAlreadyRunning)) throw err;
+  }
+}
+
+/** Low-stock Slack alerts: checked every 15 minutes. Safe to run on every start. */
+async function ensureStockAlertSchedule() {
+  const client = await temporalClient();
+  try {
+    await client.schedule.create({
+      scheduleId: STOCK_ALERT_SCHEDULE_ID,
+      spec: { intervals: [{ every: "15m" }] },
+      action: { type: "startWorkflow", workflowType: WORKFLOWS.stockAlerts, taskQueue: temporalConfig().taskQueue },
+      policies: { overlap: ScheduleOverlapPolicy.SKIP },
+    });
+    console.log("Created the low-stock alert schedule (every 15 minutes).");
   } catch (err) {
     if (!(err instanceof ScheduleAlreadyRunning)) throw err;
   }
@@ -105,6 +121,7 @@ async function main() {
   });
   await ensureRenewSchedule();
   await ensureAmazonSchedule();
+  await ensureStockAlertSchedule();
   await ensureShopifyWebhooks(shopify);
   console.log(`Worker polling task queue "${c.taskQueue}" on ${c.address}`);
   await worker.run();

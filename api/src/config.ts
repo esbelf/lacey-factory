@@ -87,3 +87,11 @@ export function shopifyConfig() {
     fakeDir: env("SHOPIFY_FAKE_DIR") ?? "tmp/fake-shopify",
   };
 }
+
+export function slackConfig() {
+  return {
+    /** Slack Incoming Webhook for low-stock alerts. Unset (local dev): alerts are only logged. */
+    webhookUrl: env("SLACK_WEBHOOK_URL"),
+    appBaseUrl: env("APP_BASE_URL") ?? "http://localhost:5173",
+  };
+}

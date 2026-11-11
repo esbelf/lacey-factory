@@ -36,6 +36,11 @@ const optionalDollars = z.preprocess((v) => (v === "" || v == null ? null : v), 
 const id = z.string().uuid();
 const optionalInches = z.preprocess((v) => (v === "" || v == null ? null : v), z.coerce.number().positive().nullable());
 const boxSize = { lengthIn: optionalInches, widthIn: optionalInches, heightIn: optionalInches };
+/** Low-stock alert level; blank = no alert. */
+const reorderLevel = z.preprocess(
+  (v) => (v === "" || v == null ? null : v),
+  z.coerce.number().int("Reorder level must be a whole number.").min(0, "Reorder level can't be negative.").nullable(),
+);
 const text = z.string().optional().nullable();
 const checkbox = z.preprocess((v) => v === true || v === "on" || v === "true", z.boolean());
 const lines = z.preprocess(
@@ -275,6 +280,7 @@ export function createApp(deps: AppDeps) {
           name: z.string().min(1, "Name is required."),
           sortOrder: z.coerce.number().int().default(0),
           kind: z.enum(["steel", "box", "part"]).default("steel"),
+          reorderLevel,
           ...boxSize,
         }),
       );
@@ -284,7 +290,7 @@ export function createApp(deps: AppDeps) {
     .patch("/steel-items/:id", need("settings"), async (c) => {
       const i = await input(
         c,
-        z.object({ name: z.string().min(1, "Name is required."), sortOrder: z.coerce.number().int(), active: checkbox, ...boxSize }),
+        z.object({ name: z.string().min(1, "Name is required."), sortOrder: z.coerce.number().int(), active: checkbox, reorderLevel, ...boxSize }),
       );
       await steel.updateSteelItem(c.var.db, param(c, "id"), i);
       return ok(c, "Saved.");

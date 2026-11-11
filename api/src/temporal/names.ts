@@ -8,6 +8,7 @@ export const WORKFLOWS = {
   amazonSync: "amazonSyncWorkflow",
   shopifyOrder: "shopifyOrderWorkflow",
   shopifyPull: "shopifyPullWorkflow",
+  stockAlerts: "stockAlertsWorkflow",
 } as const;
 
 export const SIGNALS = { gmailNotification: "gmailNotification" } as const;
@@ -15,6 +16,8 @@ export const QUERIES = { status: "status" } as const;
 
 export const RENEW_SCHEDULE_ID = "renew-gmail-watch";
 export const AMAZON_SCHEDULE_ID = "amazon-order-sync";
+/** Low-stock check every 15 minutes. */
+export const STOCK_ALERT_SCHEDULE_ID = "stock-alerts";
 /** "Sync now" from the Orders page; one at a time. */
 export const AMAZON_SYNC_NOW_ID = "amazon-sync-now";
 

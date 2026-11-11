@@ -398,6 +398,12 @@ export const steelItems = pgTable(
     heightIn: numeric("height_in", { precision: 6, scale: 2, mode: "number" }),
     sortOrder: integer("sort_order").notNull().default(0),
     active: boolean("active").notNull().default(true),
+    /** Slack low-stock alert when on hand is at or below this; null = no alert. */
+    reorderLevel: integer("reorder_level"),
+    /** When the low-stock alert went out; cleared once back above the level. */
+    lowAlertedAt: timestamp("low_alerted_at", { withTimezone: true }),
+    /** Michigan date of the last low-stock alert or Monday reminder (one per week). */
+    lowRemindedOn: date("low_reminded_on", { mode: "string" }),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("steel_items_name_unique").on(t.name)],

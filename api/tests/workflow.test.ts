@@ -72,6 +72,8 @@ afterAll(async () => {
   await env?.teardown();
 });
 
+const slackSent: string[] = [];
+
 async function withWorker<T>(fn: () => Promise<T>, orders: OrderSource | null = null, shopify: ShopifySource | null = null): Promise<T> {
   const worker = await Worker.create({
     connection: env.nativeConnection,
@@ -88,6 +90,7 @@ async function withWorker<T>(fn: () => Promise<T>, orders: OrderSource | null = 
       },
       orders,
       shopify,
+      notify: async (text) => void slackSent.push(text),
     }),
   });
   return worker.runUntil(fn);
@@ -315,4 +318,15 @@ describe("Shopify orders", () => {
     const [sync] = await db.select().from(schema.channelSync).where(eq(schema.channelSync.source, "shopify"));
     expect(sync).toMatchObject({ lastError: null, ordersSeen: 2 });
   }, 120_000);
+});
+
+describe("stock alerts workflow", () => {
+  it("checks stock levels and posts to Slack", async () => {
+    const item = await createSteelItem(db, { name: "Alert test box", kind: "box", reorderLevel: 10 });
+    const result = await withWorker(() =>
+      env.client.workflow.execute(WORKFLOWS.stockAlerts, { workflowId: "stock-alerts-test", taskQueue: "test" }),
+    );
+    expect(result.alerted).toContain(item.name);
+    expect(slackSent.at(-1)).toContain("Alert test box");
+  });
 });

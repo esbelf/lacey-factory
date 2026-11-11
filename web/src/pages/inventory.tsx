@@ -194,6 +194,7 @@ function StockTable({ items, kind }: { items: StockItem[]; kind: StockItem["kind
               {box && <th>Size</th>}
               <th className="text-right">Latest cost / {c.per}</th>
               <th className="text-right">Value on hand</th>
+              <th className="text-right">Reorder at</th>
               <th className="text-right">On hand</th>
             </tr>
           </thead>
@@ -204,7 +205,13 @@ function StockTable({ items, kind }: { items: StockItem[]; kind: StockItem["kind
                 {box && <td className="text-muted">{boxSize(i)}</td>}
                 <td className="text-right text-muted">{formatMoney(i.latestCost)}</td>
                 <td className="text-right">{formatMoney(i.value)}</td>
-                <td className={clsx("text-right text-xl font-semibold", negative(i.onHand))}>{i.onHand}</td>
+                <td className="text-right text-muted">{i.reorderLevel ?? "—"}</td>
+                <td className={clsx("text-right text-xl font-semibold", negative(i.onHand))}>
+                  {i.reorderLevel != null && i.onHand <= i.reorderLevel && (
+                    <span className="mr-2 rounded bg-danger/10 px-1.5 py-0.5 align-middle text-xs font-semibold text-danger">Reorder</span>
+                  )}
+                  {i.onHand}
+                </td>
               </tr>
             ))}
             <tr className="font-semibold">

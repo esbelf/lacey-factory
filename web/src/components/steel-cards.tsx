@@ -46,7 +46,15 @@ function SizeFields({ item }: { item?: StockItem }) {
   );
 }
 
-/** Settings → Steel poles / Boxes: the parts we stock by the piece. */
+function ReorderField({ item }: { item?: StockItem }) {
+  return (
+    <Field label="Reorder at" hint="Slack alert at or below this; blank = none">
+      <Input name="reorderLevel" type="number" step="1" min="0" inputMode="numeric" defaultValue={item?.reorderLevel ?? ""} className="w-28" />
+    </Field>
+  );
+}
+
+/** Settings → Steel poles / Boxes / Parts: what we stock by the piece. */
 export function SteelItemsCard({ items, kind = "steel" }: { items: StockItem[]; kind?: Kind }) {
   const c = COPY[kind];
   const shown = items.filter((i) => i.kind === kind);
@@ -69,6 +77,7 @@ export function SteelItemsCard({ items, kind = "steel" }: { items: StockItem[]; 
                     <Input name="name" defaultValue={i.name} className="w-64" required />
                   </Field>
                   {kind === "box" && <SizeFields item={i} />}
+                  <ReorderField item={i} />
                   <Field label="Order">
                     <Input name="sortOrder" type="number" step="1" defaultValue={i.sortOrder} className="w-20" />
                   </Field>
@@ -85,6 +94,9 @@ export function SteelItemsCard({ items, kind = "steel" }: { items: StockItem[]; 
                   {!i.active && <OffTag />}
                 </span>
                 {kind === "box" && <span className="text-sm text-muted tabular-nums">{boxSize(i)}</span>}
+                <span className="text-sm text-muted tabular-nums">
+                  {i.reorderLevel != null ? `Reorder at ${i.reorderLevel.toLocaleString("en-US")}` : "No reorder alert"}
+                </span>
               </div>
             </EditableRow>
           ))}
@@ -98,6 +110,7 @@ export function SteelItemsCard({ items, kind = "steel" }: { items: StockItem[]; 
               <Input name="name" placeholder={c.placeholder} className="w-64" required />
             </Field>
             {kind === "box" && <SizeFields />}
+            <ReorderField />
             <Field label="Order">
               <Input name="sortOrder" type="number" step="1" defaultValue={0} className="w-20" />
             </Field>

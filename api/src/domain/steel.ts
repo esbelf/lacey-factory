@@ -429,13 +429,16 @@ const dims = (kind: StockKind, d: Dimensions) =>
     ? { lengthIn: d.lengthIn ?? null, widthIn: d.widthIn ?? null, heightIn: d.heightIn ?? null }
     : { lengthIn: null, widthIn: null, heightIn: null };
 
-export async function createSteelItem(db: DB, input: { name: string; sortOrder?: number; kind?: StockKind } & Dimensions) {
+export async function createSteelItem(
+  db: DB,
+  input: { name: string; sortOrder?: number; kind?: StockKind; reorderLevel?: number | null } & Dimensions,
+) {
   const name = input.name.trim();
   const kind = input.kind ?? "steel";
   await checkName(db, name, kind);
   const [row] = await db
     .insert(steelItems)
-    .values({ name, kind, sortOrder: input.sortOrder ?? 0, ...dims(kind, input) })
+    .values({ name, kind, sortOrder: input.sortOrder ?? 0, reorderLevel: input.reorderLevel ?? null, ...dims(kind, input) })
     .returning();
   return row;
 }
@@ -443,7 +446,7 @@ export async function createSteelItem(db: DB, input: { name: string; sortOrder?:
 export async function updateSteelItem(
   db: DB,
   id: string,
-  input: { name: string; sortOrder: number; active: boolean } & Dimensions,
+  input: { name: string; sortOrder: number; active: boolean; reorderLevel?: number | null } & Dimensions,
 ) {
   const [item] = await db.select({ kind: steelItems.kind }).from(steelItems).where(eq(steelItems.id, id));
   if (!item) throw new UserError("Not found.");
@@ -451,7 +454,7 @@ export async function updateSteelItem(
   await checkName(db, name, item.kind, id);
   await db
     .update(steelItems)
-    .set({ name, sortOrder: input.sortOrder, active: input.active, ...dims(item.kind, input) })
+    .set({ name, sortOrder: input.sortOrder, active: input.active, reorderLevel: input.reorderLevel ?? null, ...dims(item.kind, input) })
     .where(eq(steelItems.id, id));
 }
 

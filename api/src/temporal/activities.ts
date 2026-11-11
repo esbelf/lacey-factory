@@ -18,7 +18,9 @@ import {
   setDocumentStatus,
 } from "../domain/invoices";
 import { markSyncFailed } from "../domain/orders";
+import { checkStockLevels } from "../domain/stock-alerts";
 import { ShopifyError } from "../shopify/admin-api";
+import { type Notify, slackNotifier } from "../slack";
 import type { ShopifySource } from "../shopify/order-source";
 import { ingestOrderById, pullBegin, pullEnd, pullPage } from "../shopify/sync";
 import { getAccount, saveHistoryId as storeHistoryId, saveWatch } from "../email/account";
@@ -42,6 +44,8 @@ export interface ActivityDeps {
   orders?: OrderSource | null;
   /** Shopify orders; null when SHOPIFY_MODE=off. */
   shopify?: ShopifySource | null;
+  /** Slack low-stock alerts; defaults to the SLACK_WEBHOOK_URL webhook. */
+  notify?: Notify;
 }
 
 export type SupplierRef = { id: string; name: string; kind: SupplierKind };
@@ -56,12 +60,17 @@ async function shopifyCall<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createActivities({ db, mail, reader, store, orders = null, shopify = null }: ActivityDeps) {
+export function createActivities({ db, mail, reader, store, orders = null, shopify = null, notify = slackNotifier() }: ActivityDeps) {
   const needShopify = () => {
     if (!shopify) throw ApplicationFailure.nonRetryable("Shopify is off (SHOPIFY_MODE=off).", "ShopifyOff");
     return shopify;
   };
   return {
+    /** Low-stock alerts, Monday reminders and back-in-stock notes (stock-alerts schedule). */
+    async checkStockLevels() {
+      return checkStockLevels(db, notify);
+    },
+
     async getStoredHistoryId(email: string): Promise<string> {
       return (await getAccount(db, email))?.historyId ?? "0";
     },

@@ -6,3 +6,4 @@ export { renewWatchWorkflow } from "./renew-watch";
 export { amazonSyncWorkflow } from "./amazon-sync";
 export { shopifyOrderWorkflow } from "./shopify-order";
 export { shopifyPullWorkflow } from "./shopify-pull";
+export { stockAlertsWorkflow } from "./stock-alerts";
