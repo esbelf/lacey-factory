@@ -4,7 +4,7 @@
 import { fromUnits, mulMoney, sumMoney, toUnits } from "@lacey-factory/shared/money";
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 
-import { productSteel, sales, steelItems, steelLots, steelUsage, supplierSteelProducts } from "../db/schema";
+import { productSteel, sales, steelItems, steelLots, steelUsage, supplierSteelProducts, suppliers } from "../db/schema";
 import type { DB, Tx } from "../db/types";
 import type { DocumentExtraction } from "../temporal/extract";
 import { UserError } from "./errors";
@@ -18,8 +18,16 @@ type ExtractedLine = DocumentExtraction["lines"][number];
 
 const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
 const money = (n: number) => `$${n.toFixed(2)}`;
-/** Units that mean "per pole". Anything else (LB, FT, CWT) can't be counted as poles. */
-const PIECE_UOM = /^(ea|each|pc|pcs|piece|pieces|pole|poles|jt|jts|joint|joints|stick|sticks|length|lengths)$/i;
+/** Units that mean "per piece". Anything else (LB, FT, CWT, a bundle of boxes) can't be counted one by one. */
+const PIECE_UOM = /^(ea|each|pc|pcs|piece|pieces|pole|poles|jt|jts|joint|joints|stick|sticks|length|lengths|bx|box|boxes)$/i;
+
+/** Box suppliers stock boxes; steel suppliers stock poles. */
+export const stockKindFor = (supplierKind: string): StockKind => (supplierKind === "boxes" ? "box" : "steel");
+const WORDS = {
+  steel: { one: "pole", many: "poles", item: "steel item", lines: "steel", stock: "steel inventory" },
+  box: { one: "box", many: "boxes", item: "box", lines: "box", stock: "box inventory" },
+} as const;
+export const stockWords = (kind: StockKind) => WORDS[kind];
 
 /** Older readings have no line_kind, so guess from the description. */
 function kindOf(line: ExtractedLine) {
@@ -51,8 +59,9 @@ function findMapping(line: ExtractedLine, mappings: SteelMapping[]) {
  * the piece and have a rate that matches its amount; freight lines add up to
  * the shipping cost; and the lines must add up to the invoice total.
  */
-export function planSteel(doc: DocumentExtraction, mappings: SteelMapping[]): SteelPlan {
+export function planSteel(doc: DocumentExtraction, mappings: SteelMapping[], stockKind: StockKind = "steel"): SteelPlan {
   if (!doc.is_invoice_or_packing_list) return { ok: false, reason: "Not an invoice." };
+  const w = WORDS[stockKind];
   const out: PlannedSteelLine[] = [];
   const freightAmounts: number[] = [];
   const otherAmounts: number[] = [];
@@ -73,19 +82,19 @@ export function planSteel(doc: DocumentExtraction, mappings: SteelMapping[]): St
     }
 
     const found = findMapping(line, mappings);
-    if ("ambiguous" in found) return { ok: false, reason: `"${label}" matches more than one steel item.` };
-    if (!found.mapping) return { ok: false, reason: `Unknown steel item "${label}". Add it under Settings → Suppliers.` };
+    if ("ambiguous" in found) return { ok: false, reason: `"${label}" matches more than one ${w.item}.` };
+    if (!found.mapping) return { ok: false, reason: `Unknown ${w.item} "${label}". Add it under Settings → Suppliers.` };
     if (line.uom && !PIECE_UOM.test(line.uom.trim())) {
-      return { ok: false, reason: `"${label}" is priced per ${line.uom}, not per pole.` };
+      return { ok: false, reason: `"${label}" is priced per ${line.uom}, not per ${w.one}.` };
     }
     const qty = line.quantity;
     if (qty == null || !Number.isInteger(qty) || qty < 1) {
-      return { ok: false, reason: `Can't tell how many poles "${label}" is (quantity ${qty ?? "?"}).` };
+      return { ok: false, reason: `Can't tell how many ${w.many} "${label}" is (quantity ${qty ?? "?"}).` };
     }
     if (line.unit_price == null && line.amount == null) return { ok: false, reason: `"${label}" has no rate or amount.` };
     const unitCost = line.unit_price ?? fromUnits(Math.round(toUnits(line.amount as number) / qty));
     const amount = line.amount ?? mulMoney(qty, unitCost);
-    // Rates are often rounded on the invoice, so allow a cent per pole.
+    // Rates are often rounded on the invoice, so allow a cent per piece.
     if (Math.abs(toUnits(mulMoney(qty, unitCost)) - toUnits(amount)) > Math.max(100, 100 * qty)) {
       return {
         ok: false,
@@ -95,7 +104,7 @@ export function planSteel(doc: DocumentExtraction, mappings: SteelMapping[]): St
     out.push({ steelItemId: found.mapping.steelItemId, label, qty, unitCost, amount });
   }
 
-  if (out.length === 0) return { ok: false, reason: "No steel lines found." };
+  if (out.length === 0) return { ok: false, reason: `No ${w.lines} lines found.` };
   const freight = sumMoney(freightAmounts);
   if (doc.invoice_total != null) {
     const sum = sumMoney([...out.map((l) => l.amount), freight, ...otherAmounts]);
@@ -285,7 +294,13 @@ export { lockItems as lockSteelItems, refreshSaleCost, settleShortages };
 
 // ── Receiving invoices ──
 
-export type ReceiveResult = { status: "registered" | "duplicate"; lotIds: string[] };
+export type ReceiveResult = { status: "registered" | "duplicate"; lotIds: string[]; stockKind: StockKind };
+
+async function supplierStockKind(db: DB | Tx, supplierId: string) {
+  const [s] = await db.select({ kind: suppliers.kind }).from(suppliers).where(eq(suppliers.id, supplierId));
+  if (!s) throw new UserError("Supplier not found.");
+  return stockKindFor(s.kind);
+}
 
 /** Creates one lot per line in one transaction. Safe to repeat, like registerRolls. */
 export async function receiveSteel(
@@ -298,12 +313,16 @@ export async function receiveSteel(
   if (toUnits(plan.freight) < 0) throw new UserError("Freight can't be negative.");
   return db.transaction(async (tx) => {
     const { doc, already } = await lockDocument(tx, documentId);
-    if (already === "duplicate") return { status: "duplicate", lotIds: [] };
+    const stockKind = await supplierStockKind(tx, doc.supplierId);
+    if (already === "duplicate") return { status: "duplicate", lotIds: [], stockKind };
     if (already === "registered") {
       const existing = await tx.select({ id: steelLots.id }).from(steelLots).where(eq(steelLots.sourceDocumentId, doc.id));
-      return { status: "registered", lotIds: existing.map((l) => l.id) };
+      return { status: "registered", lotIds: existing.map((l) => l.id), stockKind };
     }
-    await lockItems(tx, plan.lines.map((l) => l.steelItemId));
+    const items = await lockItems(tx, plan.lines.map((l) => l.steelItemId));
+    if (items.some((i) => i.kind !== stockKind)) {
+      throw new UserError(`This supplier sends ${WORDS[stockKind].many}; pick a ${WORDS[stockKind].one} for every line.`);
+    }
     const receivedOn = opts.receivedOn ?? receivedOnFor(doc);
     const lotIds: string[] = [];
     for (const l of landedCosts(plan.lines, plan.freight)) {
@@ -323,17 +342,17 @@ export async function receiveSteel(
       lotIds.push(lot.id);
     }
     await markRegistered(tx, doc.id, { shippingCost: plan.freight }, opts.reviewedBy);
-    return { status: "registered", lotIds };
+    return { status: "registered", lotIds, stockKind };
   });
 }
 
-/** Automatic path for steel suppliers: receive when every line checks out, else flag for review. */
+/** Automatic path for steel and box suppliers: receive when every line checks out, else flag for review. */
 export async function autoReceiveSteel(db: DB, documentId: string) {
   const ready = await readyForAuto(db, documentId);
   if ("status" in ready) return { status: ready.status };
   const { doc, extraction } = ready;
   const mappings = await db.select().from(supplierSteelProducts).where(eq(supplierSteelProducts.supplierId, doc.supplierId));
-  const plan = planSteel(extraction, mappings);
+  const plan = planSteel(extraction, mappings, await supplierStockKind(db, doc.supplierId));
   if (!plan.ok) {
     await setDocumentStatus(db, doc.id, "needs_review", plan.reason);
     return { status: "needs_review" as const, reason: plan.reason };
@@ -474,6 +493,10 @@ export async function addSupplierSteelProduct(
   const productCode = input.productCode?.trim() || null;
   const descriptionMatch = input.descriptionMatch?.trim() || null;
   if (!productCode && !descriptionMatch) throw new UserError("Enter a product code or description text to match.");
+  const stockKind = await supplierStockKind(db, input.supplierId);
+  const [item] = await db.select({ kind: steelItems.kind }).from(steelItems).where(eq(steelItems.id, input.steelItemId));
+  if (!item) throw new UserError("Item not found.");
+  if (item.kind !== stockKind) throw new UserError(`This supplier sends ${WORDS[stockKind].many}; pick a ${WORDS[stockKind].one}.`);
   if (productCode) {
     const [dupe] = await db
       .select()

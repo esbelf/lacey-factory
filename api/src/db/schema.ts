@@ -292,7 +292,7 @@ export const oauthStates = pgTable("oauth_states", {
 });
 
 /** What a supplier sends us. Each kind has its own handler in api/src/temporal/handlers. */
-export const supplierKind = pgEnum("supplier_kind", ["rolls", "steel"]);
+export const supplierKind = pgEnum("supplier_kind", ["rolls", "steel", "boxes"]);
 
 export const suppliers = pgTable(
   "suppliers",
@@ -403,7 +403,7 @@ export const steelItems = pgTable(
   (t) => [uniqueIndex("steel_items_name_unique").on(t.name)],
 );
 
-/** How a steel supplier's invoice lines map to our steel items. */
+/** How a steel or box supplier's invoice lines map to our steel items (poles or boxes, matching the supplier's kind). */
 export const supplierSteelProducts = pgTable(
   "supplier_steel_products",
   {

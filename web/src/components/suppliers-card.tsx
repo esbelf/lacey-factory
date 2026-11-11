@@ -13,9 +13,9 @@ type Material = {
   defaultWidthFt: number | null;
 };
 
-const KIND_LABEL = { rolls: "Rolls", steel: "Steel" } as const;
+const KIND_LABEL = { rolls: "Rolls", steel: "Steel", boxes: "Boxes" } as const;
 
-/** Settings → Suppliers: who sends us invoices, and how their products map to our rolls or steel poles. */
+/** Settings → Suppliers: who sends us invoices, and how their products map to our rolls, steel poles or boxes. */
 export function SuppliersCard({ materials, steelItems }: { materials: Material[]; steelItems: SteelData["items"] }) {
   const { data: suppliers } = useApi("suppliers");
 
@@ -23,7 +23,7 @@ export function SuppliersCard({ materials, steelItems }: { materials: Material[]
     <>
       <SectionHeader title="Suppliers">
         Invoice emails to eric@lakemat.com from these senders are read automatically. Each product code turns an invoice
-        line into rolls or steel poles. Invoices with codes not listed here go to the Inbox for review.
+        line into rolls, steel poles or shipping boxes. Invoices with codes not listed here go to the Inbox for review.
       </SectionHeader>
       {!suppliers ? null : suppliers.length === 0 ? (
         <div className="p-6">
@@ -51,10 +51,10 @@ export function SuppliersCard({ materials, steelItems }: { materials: Material[]
                 </ActionForm>
               )}
               footer={
-                s.kind === "steel" ? (
-                  <SteelMappings supplier={s} steelItems={steelItems} />
-                ) : (
+                s.kind === "rolls" ? (
                   <RollMappings supplier={s} materials={materials} />
+                ) : (
+                  <SteelMappings supplier={s} steelItems={steelItems} />
                 )
               }
             >
@@ -88,6 +88,7 @@ export function SuppliersCard({ materials, steelItems }: { materials: Material[]
               <Select name="kind" defaultValue="rolls" className="w-32">
                 <option value="rolls">Rolls</option>
                 <option value="steel">Steel</option>
+                <option value="boxes">Boxes</option>
               </Select>
             </Field>
             <SubmitButton>Add supplier</SubmitButton>
@@ -196,8 +197,10 @@ function RollMappings({ supplier, materials }: { supplier: Supplier; materials: 
   );
 }
 
+/** Steel and box suppliers: product code → pole or box (only the kind this supplier sends). */
 function SteelMappings({ supplier, steelItems }: { supplier: Supplier; steelItems: SteelData["items"] }) {
-  const active = steelItems.filter((i) => i.active);
+  const boxes = supplier.kind === "boxes";
+  const active = steelItems.filter((i) => i.active && i.kind === (boxes ? "box" : "steel"));
   return (
     <>
       <MappingTable heading="Becomes" empty={supplier.steelProducts.length === 0}>
@@ -209,18 +212,18 @@ function SteelMappings({ supplier, steelItems }: { supplier: Supplier; steelItem
         ))}
       </MappingTable>
       {active.length === 0 ? (
-        <p className="mt-2 text-sm text-muted">Add pole types under Steel poles first.</p>
+        <p className="mt-2 text-sm text-muted">{boxes ? "Add box sizes under Boxes first." : "Add pole types under Steel poles first."}</p>
       ) : (
         <AddPanel label="Add product code" inline>
           {(close) => (
             <ActionForm action={post(`/api/suppliers/${supplier.id}/steel-products`)} resetOnSuccess onSuccess={close} className={controlRow}>
               <Field label="Product code">
-                <Input name="productCode" placeholder="SP-114-10" className="w-32" />
+                <Input name="productCode" placeholder={boxes ? "RSC-581408" : "SP-114-10"} className="w-32" />
               </Field>
               <Field label="Or description contains">
-                <Input name="descriptionMatch" placeholder={`1-1/4" GALV`} className="w-44" />
+                <Input name="descriptionMatch" placeholder={boxes ? "58 X 14 X 8" : `1-1/4" GALV`} className="w-44" />
               </Field>
-              <Field label="Pole or box">
+              <Field label={boxes ? "Box" : "Pole"}>
                 <Select name="steelItemId" required defaultValue="" className="w-60">
                   <option value="" disabled>
                     Pick one…

@@ -103,8 +103,8 @@ const steelReviewLines = z.preprocess(
   z
     .array(
       z.object({
-        steelItemId: z.string().uuid("Pick a steel item for every line."),
-        qty: z.coerce.number().int("Whole numbers only.").min(1, "Each line needs at least 1 pole."),
+        steelItemId: z.string().uuid("Pick an item for every line."),
+        qty: z.coerce.number().int("Whole numbers only.").min(1, "Each line needs at least 1."),
         unitCost: dollars,
       }),
     )
@@ -581,8 +581,9 @@ export function createApp(deps: AppDeps) {
         { actor: c.var.user.email, receivedOn: i.receivedOn, reviewedBy: c.var.user.email },
       );
       if (r.status === "duplicate") return ok(c, "This invoice was already registered from another email.");
-      const poles = i.lines.reduce((a, l) => a + l.qty, 0);
-      return ok(c, `Added ${poles} pole${poles === 1 ? "" : "s"} to steel inventory.`);
+      const n = i.lines.reduce((a, l) => a + l.qty, 0);
+      const w = steel.stockWords(r.stockKind);
+      return ok(c, `Added ${n} ${n === 1 ? w.one : w.many} to ${w.stock}.`);
     })
     .post("/documents/:id/dismiss", need("invoices:review"), async (c) => {
       const doc = await inv.getDocument(c.var.db, param(c, "id"));
@@ -597,7 +598,7 @@ export function createApp(deps: AppDeps) {
     .post("/suppliers", need("settings"), async (c) => {
       const i = await input(
         c,
-        z.object({ name: z.string().min(1, "Name is required."), emailPatterns: z.string(), kind: z.enum(["rolls", "steel"]).default("rolls") }),
+        z.object({ name: z.string().min(1, "Name is required."), emailPatterns: z.string(), kind: z.enum(["rolls", "steel", "boxes"]).default("rolls") }),
       );
       await inv.saveSupplier(c.var.db, i);
       return ok(c, `Saved ${i.name}.`);
@@ -620,7 +621,7 @@ export function createApp(deps: AppDeps) {
       return ok(c, "Product removed.");
     })
     .post("/suppliers/:id/steel-products", need("settings"), async (c) => {
-      const i = await input(c, z.object({ productCode: text, descriptionMatch: text, steelItemId: z.string().uuid("Pick a steel item.") }));
+      const i = await input(c, z.object({ productCode: text, descriptionMatch: text, steelItemId: z.string().uuid("Pick a pole or box.") }));
       await steel.addSupplierSteelProduct(c.var.db, { ...i, supplierId: param(c, "id") });
       return ok(c, "Product added.");
     })

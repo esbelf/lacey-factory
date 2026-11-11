@@ -1,0 +1,1 @@
+ALTER TYPE "public"."supplier_kind" ADD VALUE 'boxes';

@@ -14,4 +14,6 @@ export const HANDLERS: Record<SupplierKind, DocumentHandler> = {
   rolls: (db, id) => autoRegister(db, id),
   /** Steel supplier: add the poles as cost lots (freight spread in) when every line checks out, else flag for review. */
   steel: (db, id) => autoReceiveSteel(db, id),
+  /** Box manufacturer: same as steel, into the box stock. */
+  boxes: (db, id) => autoReceiveSteel(db, id),
 };

@@ -9,11 +9,22 @@ import { fakeOrder } from "../src/amazon/fake-orders";
 import { normalizeAmazonOrder } from "../src/amazon/normalize";
 import * as schema from "../src/db/schema";
 import type { DB } from "../src/db/types";
+import { recordDocument, saveExtraction, saveSupplier } from "../src/domain/invoices";
 import { applyOrder, mapSku, saveOrder } from "../src/domain/orders";
 import { listProducts } from "../src/domain/queries";
 import { recordSale, voidSale } from "../src/domain/sales";
 import * as svc from "../src/domain/services";
-import { adjustSteel, createSteelItem, setProductBox, setProductSteel, steelSummary } from "../src/domain/steel";
+import {
+  addSupplierSteelProduct,
+  adjustSteel,
+  autoReceiveSteel,
+  createSteelItem,
+  receiveSteel,
+  setProductBox,
+  setProductSteel,
+  steelSummary,
+} from "../src/domain/steel";
+import type { DocumentExtraction } from "../src/temporal/extract";
 
 const ME = "eric@lakemat.com";
 
@@ -114,5 +125,90 @@ describe("shipping boxes", () => {
     await saveOrder(db, normalizeAmazonOrder(canceled, f.items));
     await applyOrder(db, id);
     expect(await onHand(box)).toBe(before);
+  });
+
+  describe("box manufacturer invoices", () => {
+    let supplierId: string;
+    let n = 0;
+    const line = (code: string, quantity: number, unit_price: number) => ({
+      line_kind: "product" as const,
+      product_code: code,
+      description: `RSC BOX ${code}`,
+      quantity,
+      uom: "EA",
+      unit_price,
+      amount: quantity * unit_price,
+      width_ft: null,
+      length_ft: null,
+      roll_numbers: [],
+    });
+    const invoice = (number: string, total: number): DocumentExtraction => ({
+      is_invoice_or_packing_list: true,
+      document_type: "invoice",
+      invoice_number: number,
+      invoice_date: "2026-10-20",
+      ship_date: null,
+      invoice_total: total,
+      lines: [
+        line("RSC-581408", 100, 3.5),
+        line("RSC-592310", 50, 6),
+        { ...line("FRT", 1, 50), line_kind: "freight" as const, product_code: null, description: "FREIGHT" },
+      ],
+    });
+    async function newDoc(x: DocumentExtraction) {
+      n++;
+      const doc = await recordDocument(db, {
+        supplierId,
+        account: ME,
+        gmailMessageId: `box-${n}`,
+        sha256: `box-sha-${n}`,
+        filename: "invoice.pdf",
+        mimeType: "application/pdf",
+        emailFrom: "Box Co <ar@boxco.com>",
+        emailSubject: "Invoice",
+        emailReceivedAt: new Date("2026-10-20T15:00:00Z"),
+        s3Key: `suppliers/boxes/${n}.pdf`,
+      });
+      await saveExtraction(db, doc.id, x);
+      return doc.id;
+    }
+
+    beforeAll(async () => {
+      supplierId = await saveSupplier(db, { name: "Box Co", emailPatterns: "@boxco.com", kind: "boxes" });
+      await addSupplierSteelProduct(db, { supplierId, productCode: "RSC-581408", steelItemId: box });
+      await addSupplierSteelProduct(db, { supplierId, productCode: "RSC-592310", steelItemId: bigBox });
+    });
+
+    it("only maps a box supplier's codes to boxes", async () => {
+      await expect(addSupplierSteelProduct(db, { supplierId, productCode: "POLE", steelItemId: pole })).rejects.toThrow(/pick a box/);
+    });
+
+    it("adds an invoiced delivery to box stock with freight spread in", async () => {
+      const lakemat = await onHand(box);
+      const muckmat = await onHand(bigBox);
+      const id = await newDoc(invoice("B-100", 700));
+      expect(await autoReceiveSteel(db, id)).toMatchObject({ status: "registered", stockKind: "box" });
+      expect(await onHand(box)).toBe(lakemat + 100);
+      expect(await onHand(bigBox)).toBe(muckmat + 50);
+      const lots = await db.select().from(schema.steelLots).where(eq(schema.steelLots.sourceDocumentId, id));
+      // $50 freight over $350 + $300 of boxes, by value.
+      expect(lots.find((l) => l.steelItemId === box)).toMatchObject({ qty: 100, unitCost: 3.5, landedUnitCost: 3.7692 });
+    });
+
+    it("sends an unknown box to review, worded for boxes", async () => {
+      const x = invoice("B-101", 700);
+      x.lines[0] = line("RSC-999", 100, 3.5);
+      expect(await autoReceiveSteel(db, await newDoc(x))).toMatchObject({
+        status: "needs_review",
+        reason: expect.stringMatching(/Unknown box "RSC-999/),
+      });
+    });
+
+    it("refuses a pole on a box invoice when reviewed by hand", async () => {
+      const id = await newDoc({ ...invoice("B-102", 700), invoice_total: 1 });
+      await expect(
+        receiveSteel(db, id, { freight: 0, lines: [{ steelItemId: pole, label: "", qty: 1, unitCost: 1, amount: 1 }] }, { actor: ME }),
+      ).rejects.toThrow(/pick a box/);
+    });
   });
 });

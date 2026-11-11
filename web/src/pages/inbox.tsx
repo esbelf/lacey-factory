@@ -56,7 +56,7 @@ export function InboxPage() {
     <>
       <PageHeader
         title="Supplier inbox"
-        subtitle="Invoices and packing lists emailed by suppliers. Rolls and steel are registered automatically when every line matches a known product and adds up; anything else waits here for review."
+        subtitle="Invoices and packing lists emailed by suppliers. Rolls, steel and boxes are registered automatically when every line matches a known product and adds up; anything else waits here for review."
       />
 
       {params.get("email") === "connected" && (
@@ -89,8 +89,13 @@ export function InboxPage() {
       {review.length > 0 && (
         <div className="mb-6 flex flex-col gap-4">
           {review.map((d) =>
-            d.supplierKind === "steel" ? (
-              <SteelReviewCard key={d.id} doc={d} steelItems={steelItems} />
+            d.supplierKind === "steel" || d.supplierKind === "boxes" ? (
+              <SteelReviewCard
+                key={d.id}
+                doc={d}
+                boxes={d.supplierKind === "boxes"}
+                steelItems={steelItems.filter((i) => i.kind === (d.supplierKind === "boxes" ? "box" : "steel"))}
+              />
             ) : (
               <ReviewCard key={d.id} doc={d} materials={activeMaterials} />
             ),
@@ -314,8 +319,9 @@ function DocumentLines({ extracted }: { extracted: Extraction }) {
 
 type SteelLine = { steelItemId: string; qty: string; unitCost: string };
 
-/** Steel invoice that needs a person: pick the pole for each line, check qty, rate and freight. */
-function SteelReviewCard({ doc, steelItems }: { doc: SupplierDocument; steelItems: SteelData["items"] }) {
+/** Steel or box invoice that needs a person: pick the pole or box for each line, check qty, rate and freight. */
+function SteelReviewCard({ doc, steelItems, boxes }: { doc: SupplierDocument; steelItems: SteelData["items"]; boxes: boolean }) {
+  const w = boxes ? { one: "Box", many: "Boxes", per: "box", stock: "box" } : { one: "Pole", many: "Poles", per: "pole", stock: "steel" };
   const extracted = (doc.extracted ?? {}) as Extraction;
   const all = extracted.lines ?? [];
   const isFreight = (l: (typeof all)[number]) => l.line_kind === "freight" || (!l.line_kind && /freight|shipping/i.test(l.description));
@@ -355,7 +361,7 @@ function SteelReviewCard({ doc, steelItems }: { doc: SupplierDocument; steelItem
         {lines.map((l, i) => (
           <div key={i} className="flex flex-wrap items-end gap-2 rounded-lg border border-line p-3">
             {products[i] && <div className="w-full text-sm text-muted">{products[i].description}</div>}
-            <Field label="Pole">
+            <Field label={w.one}>
               <Select value={l.steelItemId} onChange={(e) => set(i, { steelItemId: e.target.value })} required className="w-56">
                 <option value="" disabled>
                   Pick…
@@ -367,10 +373,10 @@ function SteelReviewCard({ doc, steelItems }: { doc: SupplierDocument; steelItem
                 ))}
               </Select>
             </Field>
-            <Field label="Poles">
+            <Field label={w.many}>
               <Input value={l.qty} onChange={(e) => set(i, { qty: e.target.value })} inputMode="numeric" className="w-24" required />
             </Field>
-            <Field label="Rate per pole ($)">
+            <Field label={`Rate per ${w.per} ($)`}>
               <Input value={l.unitCost} onChange={(e) => set(i, { unitCost: e.target.value })} inputMode="decimal" className="w-32" required />
             </Field>
             <button type="button" className={buttonClass("ghost")} onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))}>
@@ -394,10 +400,10 @@ function SteelReviewCard({ doc, steelItems }: { doc: SupplierDocument; steelItem
           <Field label="Received on">
             <Input type="date" name="receivedOn" defaultValue={doc.shipDate ?? doc.invoiceDate ?? todayInMichigan()} required />
           </Field>
-          <SubmitButton>Add to steel inventory</SubmitButton>
+          <SubmitButton>Add to {w.stock} inventory</SubmitButton>
         </div>
         <p className="text-sm text-muted">
-          Poles {formatMoney(goods)} + freight {formatMoney(Number(freight) || 0)} ={" "}
+          {w.many} {formatMoney(goods)} + freight {formatMoney(Number(freight) || 0)} ={" "}
           <strong>{formatMoney(sumMoney([goods, Number(freight) || 0]))}</strong>
           {doc.invoiceTotal != null && <> · invoice total {formatMoney(doc.invoiceTotal)}</>}
         </p>

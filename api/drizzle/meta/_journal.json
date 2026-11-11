@@ -78,6 +78,13 @@
       "when": 1794390837558,
       "tag": "0010_rename_kayak_medium_6x6",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794396031222,
+      "tag": "0011_box_suppliers",
+      "breakpoints": true
     }
   ]
 }
