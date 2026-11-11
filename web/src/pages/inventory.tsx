@@ -7,7 +7,7 @@ import { post, type Product, type SaleRow, type SteelData, useApi } from "../api
 import { ActionForm, SubmitButton } from "../components/action-form";
 import { Loading } from "../components/loading";
 import { CostLine } from "../components/orders-ui";
-import { boxSize } from "../components/steel-cards";
+import { boxSize } from "../box-size";
 import { Card, Empty, Field, formatDate, Input, PageHeader, Select, Table } from "../components/ui";
 import { useCan } from "../me";
 import { useTitle } from "../title";

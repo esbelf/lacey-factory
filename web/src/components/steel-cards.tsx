@@ -2,17 +2,13 @@ import { formatMoney } from "@lacey-factory/shared/money";
 import { useSearchParams } from "react-router";
 
 import { patch, post, type Product, type SteelData } from "../api";
+import { boxSize } from "../box-size";
 import { ActionForm, SubmitButton } from "./action-form";
 import { AddPanel, ChipTabs, EditableRow, Fact, OffTag, SectionHeader, controlRow } from "./settings-ui";
 import { Empty, Field, Input, Select } from "./ui";
 
 type StockItem = SteelData["items"][number];
 type Kind = StockItem["kind"];
-
-/** "58 × 14 × 8 in" for a box with a size. */
-export function boxSize(i: Pick<StockItem, "lengthIn" | "widthIn" | "heightIn">) {
-  return i.lengthIn && i.widthIn && i.heightIn ? `${i.lengthIn} × ${i.widthIn} × ${i.heightIn} in` : "—";
-}
 
 const COPY: Record<Kind, { title: string; intro: string; empty: string; add: string; placeholder: string }> = {
   steel: {
@@ -233,8 +229,18 @@ export function ProductsCard({ products, steelItems, canEdit }: { products: Prod
                     <Fact label="Fabric">
                       {uses.length ? uses.map((u) => `${u.qty > 1 ? `${u.qty} × ` : ""}${u.material} ${u.label}`).join(" + ") : <span className="text-muted">None</span>}
                     </Fact>
-                    <Fact label="Steel">
-                      {parts.length ? parts.map((s) => `${s.qty} × ${s.name}`).join(" + ") : <span className="text-muted">None</span>}
+                    <Fact label="Steel" wrap>
+                      {parts.length ? (
+                        <ul>
+                          {parts.map((s) => (
+                            <li key={s.steelItemId} className="tabular-nums">
+                              {s.qty} × {s.name}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <span className="text-muted">None</span>
+                      )}
                     </Fact>
                     <Fact label="Box">{box ? box.name : <span className="font-semibold text-danger">Not set</span>}</Fact>
                     <Fact label="Packed">

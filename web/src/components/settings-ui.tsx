@@ -201,11 +201,12 @@ export function CutDiagram({
 }
 
 /** Label + value pair used in product recipes. */
-export function Fact({ label, children }: { label: string; children: ReactNode }) {
+/** A labeled value; `wrap` shows all of it instead of cutting it off with "…". */
+export function Fact({ label, children, wrap }: { label: string; children: ReactNode; wrap?: boolean }) {
   return (
     <div className="min-w-0">
       <dt className="text-xs text-muted">{label}</dt>
-      <dd className="text-sm text-ink sm:truncate">{children}</dd>
+      <dd className={clsx("text-sm text-ink", !wrap && "sm:truncate")}>{children}</dd>
     </div>
   );
 }
