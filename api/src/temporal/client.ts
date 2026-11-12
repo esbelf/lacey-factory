@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { Client, Connection, WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
 
 import { temporalConfig } from "../config";
@@ -5,6 +7,8 @@ import {
   AMAZON_SYNC_NOW_ID,
   type GmailNotification,
   mailboxWorkflowId,
+  SHIPSTATION_PULL_ID,
+  shipstationEventWorkflowId,
   SHOPIFY_PULL_ID,
   shopifyOrderWorkflowId,
   SIGNALS,
@@ -80,6 +84,38 @@ export async function startShopifyPull(since: string | null): Promise<"started" 
   try {
     await client.workflow.start(WORKFLOWS.shopifyPull, {
       workflowId: SHOPIFY_PULL_ID,
+      taskQueue: temporalConfig().taskQueue,
+      args: [{ since }],
+      workflowIdConflictPolicy: "FAIL",
+    });
+    return "started";
+  } catch (err) {
+    if (err instanceof WorkflowExecutionAlreadyStartedError) return "running";
+    throw err;
+  }
+}
+
+/** A ShipStation webhook: start a run that fetches its labels. A re-sent delivery (same body) is ignored. */
+export async function notifyShipStation(body: unknown, rawBody: string): Promise<void> {
+  const client = await temporalClient();
+  try {
+    await client.workflow.start(WORKFLOWS.shipstationEvent, {
+      workflowId: shipstationEventWorkflowId(createHash("sha256").update(rawBody).digest("hex")),
+      taskQueue: temporalConfig().taskQueue,
+      args: [{ body }],
+      workflowIdReusePolicy: "REJECT_DUPLICATE",
+    });
+  } catch (err) {
+    if (!(err instanceof WorkflowExecutionAlreadyStartedError)) throw err;
+  }
+}
+
+/** "Re-check shipments": reads ShipStation labels created since a date (or the last re-check). */
+export async function startShipStationPull(since: string | null): Promise<"started" | "running"> {
+  const client = await temporalClient();
+  try {
+    await client.workflow.start(WORKFLOWS.shipstationPull, {
+      workflowId: SHIPSTATION_PULL_ID,
       taskQueue: temporalConfig().taskQueue,
       args: [{ since }],
       workflowIdConflictPolicy: "FAIL",

@@ -9,6 +9,8 @@ export const WORKFLOWS = {
   shopifyOrder: "shopifyOrderWorkflow",
   shopifyPull: "shopifyPullWorkflow",
   stockAlerts: "stockAlertsWorkflow",
+  shipstationEvent: "shipstationEventWorkflow",
+  shipstationPull: "shipstationPullWorkflow",
 } as const;
 
 export const SIGNALS = { gmailNotification: "gmailNotification" } as const;
@@ -23,6 +25,12 @@ export const AMAZON_SYNC_NOW_ID = "amazon-sync-now";
 
 /** "Pull orders" from the Orders page; one at a time. */
 export const SHOPIFY_PULL_ID = "shopify-pull-now";
+
+/** "Re-check shipments" from the Orders page; one at a time. */
+export const SHIPSTATION_PULL_ID = "shipstation-pull-now";
+
+/** One run per ShipStation delivery (hash of its body), so a re-sent webhook is dropped. */
+export const shipstationEventWorkflowId = (bodyHash: string) => `shipstation-event-${bodyHash.slice(0, 24)}`;
 
 /** One run per webhook delivery; Shopify's retries of the same delivery reuse the id. */
 export const shopifyOrderWorkflowId = (orderGid: string, webhookId: string) =>

@@ -57,6 +57,12 @@ x-api-env: &api-env
   SHOPIFY_API_VERSION: ${SHOPIFY_API_VERSION:-2026-01}
   SHOPIFY_WEBHOOK_URL: ${SHOPIFY_WEBHOOK_URL:-}
   SHOPIFY_PULL_START: ${SHOPIFY_PULL_START:-}
+  # ShipStation labels arrive by webhook: off | fake (`npm run simulate:shipstation`) | live.
+  SHIPSTATION_MODE: ${SHIPSTATION_MODE:-off}
+  SHIPSTATION_API_KEY: ${SHIPSTATION_API_KEY:-}
+  SHIPSTATION_WEBHOOK_URL: ${SHIPSTATION_WEBHOOK_URL:-}
+  # Low-stock alerts; empty = only logged.
+  SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
 
 services:
   db:

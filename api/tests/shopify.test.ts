@@ -294,6 +294,8 @@ describe("POST /api/webhooks/shopify", () => {
         notified.push([gid, webhookId]);
       },
       startShopifyPull: async () => "started",
+      notifyShipStation: async () => {},
+      startShipStationPull: async () => "started",
     });
   });
   afterAll(() => {

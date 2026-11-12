@@ -719,15 +719,55 @@ export const channelSkus = pgTable(
   (t) => [uniqueIndex("channel_skus_source_sku_unique").on(t.source, t.sku)],
 );
 
-/** Polling cursor and health, one row per channel. */
+/** Where sync health is kept: the sales channels, plus ShipStation (labels, not sales). */
+export type SyncSource = (typeof saleSource.enumValues)[number] | "shipstation";
+
+/** Polling cursor and health, one row per channel (and one for ShipStation). */
 export const channelSync = pgTable("channel_sync", {
-  source: saleSource("source").primaryKey(),
+  source: text("source").$type<SyncSource>().primaryKey(),
   /** Orders updated up to here have been processed. */
   cursor: timestamp("cursor", { withTimezone: true }),
   lastRunAt: timestamp("last_run_at", { withTimezone: true }),
   lastOkAt: timestamp("last_ok_at", { withTimezone: true }),
   lastError: text("last_error"),
   ordersSeen: integer("orders_seen").notNull().default(0),
-  /** Last webhook from the channel (Shopify). */
+  /** Last webhook from the channel (Shopify, ShipStation). */
   lastEventAt: timestamp("last_event_at", { withTimezone: true }),
 });
+
+/**
+ * One ShipStation shipping label: what we paid the carrier and when it shipped.
+ * Linked to its order when we have it (order_id stays null until the order arrives).
+ * An order's shipping cost is the sum of its labels that aren't voided.
+ */
+export const shipments = pgTable(
+  "shipments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    labelId: text("label_id").notNull(),
+    shipmentId: text("shipment_id"),
+    orderId: uuid("order_id").references(() => orders.id),
+    /** ShipStation's store type: shopify, amazon_us, amazon_ca… */
+    orderSourceCode: text("order_source_code"),
+    /** The order id the store gave ShipStation (Amazon order number, Shopify numeric id). */
+    externalOrderId: text("external_order_id"),
+    shipmentNumber: text("shipment_number"),
+    /** processing, completed, error, voided. Only completed labels count. */
+    status: text("status").notNull(),
+    carrierCode: text("carrier_code"),
+    serviceCode: text("service_code"),
+    trackingNumber: text("tracking_number"),
+    trackingUrl: text("tracking_url"),
+    shipDate: date("ship_date", { mode: "string" }),
+    /** When ShipStation said the order shipped (fulfillment_shipped_v2). */
+    shippedAt: timestamp("shipped_at", { withTimezone: true }),
+    /** Label plus insurance. */
+    cost: money("cost").notNull(),
+    currency: text("currency"),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    raw: jsonb("raw").notNull(),
+    createdAt: createdAt(),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("shipments_label_unique").on(t.labelId), index("shipments_order_idx").on(t.orderId)],
+);

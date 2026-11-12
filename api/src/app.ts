@@ -6,7 +6,7 @@ import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
 import type { Authenticate } from "./auth";
-import { amazonConfig, emailConfig, shopifyConfig } from "./config";
+import { amazonConfig, emailConfig, shipstationConfig, shopifyConfig } from "./config";
 import type { DB } from "./db/types";
 import { loadCatalog } from "./domain/catalog";
 import { setRollCost } from "./domain/cogs";
@@ -20,6 +20,7 @@ import * as svc from "./domain/services";
 import * as steel from "./domain/steel";
 import { type AppUser, ensureUser, listUsers, setUserRole } from "./domain/users";
 import * as mailbox from "./email/account";
+import { type VerifyResult, verifyShipStationSignature } from "./shipstation/webhook";
 import { ORDER_TOPICS, parseOrderWebhook, verifyShopifyHmac } from "./shopify/webhook";
 import type { GmailNotification } from "./temporal/names";
 
@@ -79,10 +80,22 @@ export type AppDeps = {
   notifyShopifyOrder: (orderGid: string, webhookId: string) => Promise<void>;
   /** "Pull orders": read Shopify orders updated since a date, or since the last pull. */
   startShopifyPull: (since: string | null) => Promise<"started" | "running">;
+  /** A ShipStation webhook arrived: fetch its labels and save them (Temporal). */
+  notifyShipStation: (body: unknown, rawBody: string) => Promise<void>;
+  /** "Re-check shipments": read ShipStation labels since a date, or since the last re-check. */
+  startShipStationPull: (since: string | null) => Promise<"started" | "running">;
+  /** Checks a ShipStation webhook signature; tests pass their own key set. */
+  verifyShipStation?: (rawBody: string, header: (name: string) => string | undefined) => Promise<VerifyResult>;
 };
 
-/** Routes that skip the app login: browser redirect from Google, Pub/Sub pushes and Shopify webhooks (signed). */
-const PUBLIC_PATHS = new Set(["/api/health", "/api/email/callback", "/api/webhooks/gmail", "/api/webhooks/shopify"]);
+/** Routes that skip the app login: browser redirect from Google, Pub/Sub pushes and Shopify/ShipStation webhooks (signed). */
+const PUBLIC_PATHS = new Set([
+  "/api/health",
+  "/api/email/callback",
+  "/api/webhooks/gmail",
+  "/api/webhooks/shopify",
+  "/api/webhooks/shipstation",
+]);
 
 const saleSource = z.enum(["amazon", "shopify"], { message: "Pick Amazon or Shopify." });
 
@@ -183,6 +196,32 @@ export function createApp(deps: AppDeps) {
     const db = deps.getDb();
     await ord.markEventReceived(db, "shopify");
     await deps.notifyShopifyOrder(hook.orderGid, hook.webhookId);
+    return c.body(null, 200);
+  });
+
+  // ShipStation label and shipped webhooks, signed with ShipStation's RSA key.
+  // Reply fast (ShipStation waits 10 s); the labels are fetched by a Temporal
+  // workflow. A non-2xx response makes ShipStation retry (twice, 30 min apart).
+  app.post("/webhooks/shipstation", async (c) => {
+    const cfg = shipstationConfig();
+    if (cfg.mode === "off") return c.json({ error: "ShipStation is off." }, 404);
+    const raw = await c.req.text();
+    if (!cfg.skipSignature) {
+      const header = (name: string) => c.req.header(name);
+      const check = deps.verifyShipStation
+        ? await deps.verifyShipStation(raw, header)
+        : await verifyShipStationSignature(raw, header, { jwksUrl: cfg.jwksUrl });
+      if (!check.ok) return c.json({ error: check.error }, check.status);
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return c.json({ error: "Body isn't JSON" }, 400);
+    }
+    if (!body || typeof body !== "object") return c.json({ error: "Body isn't an object" }, 400);
+    await ord.markEventReceived(deps.getDb(), "shipstation");
+    await deps.notifyShipStation(body, raw);
     return c.body(null, 200);
   });
 
@@ -453,7 +492,7 @@ export function createApp(deps: AppDeps) {
       return ok(c, "Sale undone.");
     })
 
-    // ── Channel orders (Amazon, Shopify) ──
+    // ── Channel orders (Amazon, Shopify) and their ShipStation shipments ──
     .get("/orders", need("orders"), async (c) => {
       const f = c.req.query();
       return c.json(
@@ -469,14 +508,16 @@ export function createApp(deps: AppDeps) {
       );
     })
     .get("/orders/status", need("orders"), async (c) => {
-      const [amazon, shopify, problems] = await Promise.all([
+      const [amazon, shopify, shipstation, problems] = await Promise.all([
         ord.syncState(c.var.db, "amazon"),
         ord.syncState(c.var.db, "shopify"),
+        ord.syncState(c.var.db, "shipstation"),
         ord.orderProblems(c.var.db),
       ]);
       return c.json({
         amazon: { mode: amazonConfig().mode, sync: amazon },
         shopify: { mode: shopifyConfig().mode, sync: shopify, shop: shopifyConfig().shop },
+        shipstation: { mode: shipstationConfig().mode, sync: shipstation },
         problems,
       });
     })
@@ -489,10 +530,15 @@ export function createApp(deps: AppDeps) {
       const i = await input(
         c,
         z.object({
-          source: z.preprocess((v) => v ?? "amazon", saleSource),
+          source: z.preprocess((v) => v ?? "amazon", z.enum(["amazon", "shopify", "shipstation"], { message: "Pick what to sync." })),
           since: z.preprocess((v) => (v === "" || v == null ? null : v), isoDate.nullable()),
         }),
       );
+      if (i.source === "shipstation") {
+        if (shipstationConfig().mode === "off") throw new UserError("ShipStation is off. Set SHIPSTATION_MODE in .env.");
+        const r = await deps.startShipStationPull(i.since);
+        return ok(c, r === "running" ? "A re-check is already running." : "Re-checking ShipStation shipments… refresh in a moment.");
+      }
       if (i.source === "shopify") {
         if (shopifyConfig().mode === "off") throw new UserError("Shopify is off. Set SHOPIFY_MODE in .env.");
         const r = await deps.startShopifyPull(i.since);

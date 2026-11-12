@@ -10,9 +10,10 @@ import { ScheduleAlreadyRunning, ScheduleOverlapPolicy } from "@temporalio/clien
 import { NativeConnection, Worker } from "@temporalio/worker";
 
 import { orderSource } from "./amazon/order-source";
-import { amazonConfig, claudeConfig, shopifyConfig, temporalConfig } from "./config";
+import { amazonConfig, claudeConfig, shipstationConfig, shopifyConfig, temporalConfig } from "./config";
 import { getDb } from "./db";
 import { mailSource } from "./email/mail-source";
+import { type ShipStationSource, shipstationSource } from "./shipstation/source";
 import { type ShopifySource, shopifySource } from "./shopify/order-source";
 import { getDocument, putDocument } from "./storage";
 import { createActivities } from "./temporal/activities";
@@ -100,9 +101,33 @@ async function ensureShopifyWebhooks(source: ShopifySource | null) {
   }
 }
 
+/**
+ * ShipStation label and shipped webhooks (live mode). ShipStation keeps one URL
+ * per event per account, so an event already sent somewhere else (e.g. the
+ * other environment) is left alone and logged. Problems are logged, not fatal.
+ */
+async function ensureShipStationWebhooks(source: ShipStationSource | null) {
+  const { mode, webhookUrl } = shipstationConfig();
+  if (mode !== "live" || !source) return;
+  if (!webhookUrl) {
+    console.warn("SHIPSTATION_WEBHOOK_URL isn't set, so ShipStation webhooks weren't registered.");
+    return;
+  }
+  try {
+    const { added, elsewhere } = await source.ensureWebhooks(webhookUrl);
+    console.log(added.length ? `Subscribed ShipStation webhooks: ${added.join(", ")}.` : "ShipStation webhooks checked.");
+    for (const e of elsewhere) {
+      console.warn(`ShipStation ${e.event} already goes to ${e.url}, not ${webhookUrl}. Left as is (one URL per event).`);
+    }
+  } catch (err) {
+    console.error("Couldn't register ShipStation webhooks:", err instanceof Error ? err.message : err);
+  }
+}
+
 async function main() {
   const db = getDb();
   const shopify = shopifySource();
+  const shipstation = shipstationSource();
   const activities = createActivities({
     db,
     mail: mailSource(db),
@@ -110,6 +135,7 @@ async function main() {
     store: { put: putDocument, get: getDocument },
     orders: orderSource(),
     shopify,
+    shipstation,
   });
   const c = temporalConfig();
   const worker = await Worker.create({
@@ -123,6 +149,7 @@ async function main() {
   await ensureAmazonSchedule();
   await ensureStockAlertSchedule();
   await ensureShopifyWebhooks(shopify);
+  await ensureShipStationWebhooks(shipstation);
   console.log(`Worker polling task queue "${c.taskQueue}" on ${c.address}`);
   await worker.run();
 }

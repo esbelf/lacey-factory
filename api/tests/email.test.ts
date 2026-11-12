@@ -44,6 +44,8 @@ beforeAll(async () => {
     startAmazonSync: async () => "started",
     notifyShopifyOrder: async () => {},
     startShopifyPull: async () => "started",
+    notifyShipStation: async () => {},
+    startShipStationPull: async () => "started",
   });
 });
 

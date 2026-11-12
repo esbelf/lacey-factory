@@ -2,13 +2,15 @@
 // them; applyOrder then turns each paid line into a sale through recordSale,
 // and a cancel undoes it. Everything here is safe to run again.
 import { todayInMichigan } from "@lacey-factory/shared/feet";
+import { sumMoney } from "@lacey-factory/shared/money";
 import { and, desc, eq, ilike, inArray, lt, or, sql } from "drizzle-orm";
 
-import { channelSkus, channelSync, customers, orderItems, orders, products, sales } from "../db/schema";
+import { channelSkus, channelSync, customers, orderItems, orders, products, sales, type SyncSource } from "../db/schema";
 import type { DB } from "../db/types";
 import { type CustomerInput, matchCustomer } from "./customers";
 import { UserError } from "./errors";
 import { recordSale, type SaleSource, voidSale } from "./sales";
+import { linkWaitingShipments, shipmentsForOrder, shippingForOrders } from "./shipments";
 
 export type Order = typeof orders.$inferSelect;
 export type OrderItem = typeof orderItems.$inferSelect;
@@ -78,6 +80,7 @@ export async function saveOrder(db: DB, n: NormalizedOrder): Promise<{ id: strin
         .values({ orderId: id, externalItemId, ...data })
         .onConflictDoUpdate({ target: [orderItems.orderId, orderItems.externalItemId], set: data });
     }
+    await linkWaitingShipments(tx, { id, source: n.order.source, externalId: n.order.externalId, orderName: n.order.orderName });
     return { id, changed: true };
   });
 }
@@ -283,10 +286,12 @@ export async function listOrders(db: DB, f: OrderFilters = {}) {
     .limit(limit + 1);
 
   const page = rows.slice(0, limit);
-  const items = await itemsFor(db, page.map((r) => r.order.id));
+  const ids = page.map((r) => r.order.id);
+  const [items, shipping] = await Promise.all([itemsFor(db, ids), shippingForOrders(db, ids)]);
   return {
     orders: page.map(({ order: o, customerName }) => ({
       ...withoutRaw(o),
+      ...(shipping.get(o.id) ?? NO_SHIPPING),
       customerName,
       items: items.filter((i) => i.item.orderId === o.id).map(slimItem),
     })),
@@ -316,7 +321,24 @@ export async function getOrder(db: DB, id: string) {
     const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(orders).where(eq(orders.customerId, order.customerId));
     customer = c ? { ...c, orderCount: n } : null;
   }
-  return { ...order, customer, items: items.map(({ item, ...rest }) => ({ ...item, ...rest })) };
+  const [shipping, shipmentRows] = await Promise.all([shippingForOrders(db, [id]), shipmentsForOrder(db, id)]);
+  return {
+    ...order,
+    ...(shipping.get(id) ?? NO_SHIPPING),
+    customer,
+    shipments: shipmentRows,
+    cogs: orderCogs(items),
+    items: items.map(({ item, ...rest }) => ({ ...item, ...rest })),
+  };
+}
+
+const NO_SHIPPING = { shippingCost: null, shippingCurrency: null, shippedOn: null };
+
+/** What the order's recorded sales cost us: steel + box + parts + fabric + sewing. Null when nothing is recorded yet. */
+function orderCogs(items: Awaited<ReturnType<typeof itemsFor>>): number | null {
+  const sold = items.filter((i) => i.item.saleId && !i.saleVoided);
+  if (!sold.length) return null;
+  return sumMoney(sold.flatMap((i) => [i.steelCost, i.boxCost, i.partsCost, i.fabricCost, i.sewingCost].map((n) => n ?? 0)));
 }
 
 /** What needs a person: unknown SKUs and products without a recipe. */
@@ -351,19 +373,19 @@ export async function orderProblems(db: DB) {
 
 // ── Sync bookkeeping ──
 
-export async function syncState(db: DB, source: SaleSource) {
+export async function syncState(db: DB, source: SyncSource) {
   const [row] = await db.select().from(channelSync).where(eq(channelSync.source, source));
   return row ?? null;
 }
 
-export async function markSyncStarted(db: DB, source: SaleSource) {
+export async function markSyncStarted(db: DB, source: SyncSource) {
   await db
     .insert(channelSync)
     .values({ source, lastRunAt: new Date() })
     .onConflictDoUpdate({ target: channelSync.source, set: { lastRunAt: new Date() } });
 }
 
-export async function markSyncDone(db: DB, source: SaleSource, input: { cursor: Date | null; ordersSeen: number }) {
+export async function markSyncDone(db: DB, source: SyncSource, input: { cursor: Date | null; ordersSeen: number }) {
   await db
     .insert(channelSync)
     .values({ source, cursor: input.cursor, lastOkAt: new Date(), ordersSeen: input.ordersSeen })
@@ -378,7 +400,7 @@ export async function markSyncDone(db: DB, source: SaleSource, input: { cursor: 
     });
 }
 
-export async function markSyncFailed(db: DB, source: SaleSource, message: string) {
+export async function markSyncFailed(db: DB, source: SyncSource, message: string) {
   await db
     .insert(channelSync)
     .values({ source, lastRunAt: new Date(), lastError: message })
@@ -397,7 +419,7 @@ export async function orderIdsForSales(db: DB, saleIds: string[]) {
 }
 
 /** A channel webhook arrived (shown as "last webhook received"). */
-export async function markEventReceived(db: DB, source: SaleSource) {
+export async function markEventReceived(db: DB, source: SyncSource) {
   await db
     .insert(channelSync)
     .values({ source, lastEventAt: new Date() })

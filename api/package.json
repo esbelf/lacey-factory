@@ -17,6 +17,7 @@
     "simulate": "tsx scripts/simulate.ts",
     "simulate:amazon": "tsx scripts/simulate-amazon.ts",
     "simulate:shopify": "tsx scripts/simulate-shopify.ts",
+    "simulate:shipstation": "tsx scripts/simulate-shipstation.ts",
     "read-document": "tsx scripts/read-document.ts"
   },
   "dependencies": {

@@ -88,6 +88,24 @@ export function shopifyConfig() {
   };
 }
 
+export type ShipStationMode = "off" | "fake" | "live";
+
+export function shipstationConfig() {
+  const mode = (env("SHIPSTATION_MODE") ?? "off") as ShipStationMode;
+  return {
+    /** off: webhooks rejected. fake: JSON labels in SHIPSTATION_FAKE_DIR. live: ShipStation API V2. */
+    mode,
+    apiKey: env("SHIPSTATION_API_KEY"),
+    /** Where ShipStation sends label/shipped webhooks; the worker subscribes this URL (live). */
+    webhookUrl: env("SHIPSTATION_WEBHOOK_URL"),
+    /** Public keys ShipStation signs webhooks with. */
+    jwksUrl: env("SHIPSTATION_JWKS_URL") ?? "https://api.shipengine.com/jwks",
+    fakeDir: env("SHIPSTATION_FAKE_DIR") ?? "tmp/fake-shipstation",
+    /** The simulator's webhooks aren't signed: accepted only in fake mode on a dev machine. */
+    skipSignature: mode === "fake" && env("NODE_ENV") === "development",
+  };
+}
+
 export function slackConfig() {
   return {
     /** Slack Incoming Webhook for low-stock alerts. Unset (local dev): alerts are only logged. */

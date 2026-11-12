@@ -14,14 +14,14 @@ import {
   shipToShort,
   SkuLinkForm,
 } from "../components/orders-ui";
-import { Card, Empty, Field, Input, PageHeader, Select, Table } from "../components/ui";
+import { Card, Empty, Field, formatDate, Input, PageHeader, Select, Table } from "../components/ui";
 import { useTitle } from "../title";
 
 const STATUSES: Record<string, string[]> = {
   amazon: ["Pending", "Unshipped", "PartiallyShipped", "Shipped", "Canceled", "Unfulfillable"],
   shopify: ["PAID", "PARTIALLY_PAID", "PARTIALLY_REFUNDED", "REFUNDED", "VOIDED"],
 };
-const MODE_LABEL: Record<string, string> = { off: "Off", fake: "Fake orders", sandbox: "Sandbox", live: "Live" };
+const MODE_LABEL: Record<string, string> = { off: "Off", fake: "Fake data", sandbox: "Sandbox", live: "Live" };
 
 export function OrdersPage() {
   useTitle("Orders");
@@ -61,9 +61,10 @@ export function OrdersPage() {
       />
       <div className="flex flex-col gap-4">
         {status && (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <AmazonStatus status={status.amazon} />
             <ShopifyStatus status={status.shopify} />
+            <ShipStationStatus status={status.shipstation} />
           </div>
         )}
         {status && products && <NeedsAttention status={status} products={products} />}
@@ -218,6 +219,34 @@ function ShopifyStatus({ status }: { status: OrdersStatus["shopify"] }) {
   );
 }
 
+function ShipStationStatus({ status }: { status: OrdersStatus["shipstation"] }) {
+  const { mode, sync } = status;
+  return (
+    <ChannelCard title="ShipStation" mode={mode}>
+      {mode === "off" ? (
+        <span>Set SHIPSTATION_MODE in .env to get shipping costs.</span>
+      ) : (
+        <>
+          <span>
+            Sends each label as it&apos;s bought, with what it cost. Last webhook{" "}
+            {sync?.lastEventAt ? formatDateTime(sync.lastEventAt) : "never"}
+            {sync?.lastOkAt && <> · last re-check {formatDateTime(sync.lastOkAt)}</>}
+          </span>
+          <span>Voided labels don&apos;t send a webhook: re-check to drop them from the cost.</span>
+          <ActionForm action={post("/api/orders/sync")} className="mt-2 flex flex-wrap items-end gap-2">
+            <input type="hidden" name="source" value="shipstation" />
+            <Field label="Since" hint={sync?.cursor ? "Empty: since the last re-check" : "Empty: the last 30 days"}>
+              <Input name="since" type="date" className="w-44" />
+            </Field>
+            <SubmitButton variant="secondary">Re-check shipments</SubmitButton>
+          </ActionForm>
+        </>
+      )}
+      {sync?.lastError && <span className="font-semibold text-danger">Last problem: {sync.lastError}</span>}
+    </ChannelCard>
+  );
+}
+
 function NeedsAttention({ status, products }: { status: OrdersStatus; products: Product[] }) {
   const { unmapped, noRecipe } = status.problems;
   if (!unmapped.length && !noRecipe.length) return null;
@@ -276,6 +305,7 @@ function OrdersTable({ orders }: { orders: NonNullable<ReturnType<typeof useOrde
           <th>Ship to</th>
           <th>Status</th>
           <th>Items</th>
+          <th>Shipped</th>
           <th className="text-right">Total</th>
         </tr>
       </thead>
@@ -323,6 +353,12 @@ function OrdersTable({ orders }: { orders: NonNullable<ReturnType<typeof useOrde
                   </li>
                 ))}
               </ul>
+            </td>
+            <td className="whitespace-nowrap">
+              {o.shippedOn ? formatDate(o.shippedOn) : <span className="text-muted">—</span>}
+              {o.shippingCost != null && (
+                <div className="text-sm text-muted">label {formatPrice(o.shippingCost, o.shippingCurrency)}</div>
+              )}
             </td>
             <td className="text-right whitespace-nowrap">
               {formatPrice(o.orderTotal, o.currency)}

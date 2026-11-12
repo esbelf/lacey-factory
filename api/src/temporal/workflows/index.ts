@@ -7,3 +7,5 @@ export { amazonSyncWorkflow } from "./amazon-sync";
 export { shopifyOrderWorkflow } from "./shopify-order";
 export { shopifyPullWorkflow } from "./shopify-pull";
 export { stockAlertsWorkflow } from "./stock-alerts";
+export { shipstationEventWorkflow } from "./shipstation-event";
+export { shipstationPullWorkflow } from "./shipstation-pull";

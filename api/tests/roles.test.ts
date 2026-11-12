@@ -31,6 +31,8 @@ beforeAll(async () => {
     startAmazonSync: async () => "started",
     notifyShopifyOrder: async () => {},
     startShopifyPull: async () => "started",
+    notifyShipStation: async () => {},
+    startShipStationPull: async () => "started",
     authenticate: async (req) => {
       const email = req.headers.get("x-test-email");
       if (!email) return null;

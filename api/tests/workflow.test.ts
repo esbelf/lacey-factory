@@ -19,14 +19,16 @@ import { loadCatalog } from "../src/domain/catalog";
 import { fakeOrder } from "../src/amazon/fake-orders";
 import { FakeOrderSource, type OrderSource } from "../src/amazon/order-source";
 import { saveSupplier } from "../src/domain/invoices";
-import { mapSku } from "../src/domain/orders";
+import { getOrder, mapSku, saveOrder } from "../src/domain/orders";
+import { fakeLabel } from "../src/shipstation/fake-labels";
+import { FakeShipStationSource, type ShipStationSource } from "../src/shipstation/source";
 import { fakeShopifyOrder, SAMPLE_CUSTOMERS } from "../src/shopify/fake-orders";
 import { FakeShopifySource, type ShopifySource } from "../src/shopify/order-source";
 import { addSupplierSteelProduct, createSteelItem } from "../src/domain/steel";
 import { FakeMailSource, type FakeEmail } from "../src/email/mail-source";
 import { createActivities } from "../src/temporal/activities";
 import type { DocumentReader } from "../src/temporal/extract";
-import { mailboxWorkflowId, shopifyOrderWorkflowId, SIGNALS, WORKFLOWS } from "../src/temporal/names";
+import { mailboxWorkflowId, shipstationEventWorkflowId, shopifyOrderWorkflowId, SIGNALS, WORKFLOWS } from "../src/temporal/names";
 import { hanesPackingList } from "./fixtures/hanes-extraction";
 import { steelInvoice } from "./fixtures/steel-extraction";
 
@@ -74,7 +76,12 @@ afterAll(async () => {
 
 const slackSent: string[] = [];
 
-async function withWorker<T>(fn: () => Promise<T>, orders: OrderSource | null = null, shopify: ShopifySource | null = null): Promise<T> {
+async function withWorker<T>(
+  fn: () => Promise<T>,
+  orders: OrderSource | null = null,
+  shopify: ShopifySource | null = null,
+  shipstation: ShipStationSource | null = null,
+): Promise<T> {
   const worker = await Worker.create({
     connection: env.nativeConnection,
     bundlerOptions: { webpackConfigHook: (c) => ({ ...c, stats: "errors-only", infrastructureLogging: { level: "error" } }) },
@@ -90,6 +97,7 @@ async function withWorker<T>(fn: () => Promise<T>, orders: OrderSource | null = 
       },
       orders,
       shopify,
+      shipstation,
       notify: async (text) => void slackSent.push(text),
     }),
   });
@@ -329,4 +337,51 @@ describe("stock alerts workflow", () => {
     expect(result.alerted).toContain(item.name);
     expect(slackSent.at(-1)).toContain("Alert test box");
   });
+});
+
+describe("ShipStation shipments", () => {
+  it("a label webhook saves its cost on the order; a re-check finds labels the webhooks missed", async () => {
+    const dir = path.join(inbox, "..", "shipstation");
+    await mkdir(dir, { recursive: true });
+    const { id } = await saveOrder(db, {
+      order: {
+        source: "amazon",
+        externalId: "112-7777777-7777777",
+        status: "Shipped",
+        currency: "USD",
+        purchasedAt: new Date(),
+        lastUpdatedAt: new Date(),
+        raw: {},
+      },
+      items: [],
+    });
+    const first = fakeLabel({ orderSourceCode: "amazon_us", externalOrderId: "112-7777777-7777777", cost: 20 });
+    const missed = fakeLabel({ orderSourceCode: "amazon_us", externalOrderId: "112-7777777-7777777", cost: 5.5 });
+    for (const f of [first, missed]) await writeFile(path.join(dir, `${f.label.label_id}.json`), JSON.stringify(f));
+    const source = new FakeShipStationSource(dir);
+
+    await withWorker(
+      async () => {
+        const r = await env.client.workflow.execute(WORKFLOWS.shipstationEvent, {
+          workflowId: shipstationEventWorkflowId("abc123"),
+          taskQueue: "test",
+          args: [{ body: { resource_type: "LABEL_CREATED_V2", data: { label_id: first.label.label_id } } }],
+        });
+        expect(r).toMatchObject({ labels: 1, matched: 1 });
+        const pulled = await env.client.workflow.execute(WORKFLOWS.shipstationPull, {
+          workflowId: "shipstation-pull-1",
+          taskQueue: "test",
+          args: [{ since: new Date(Date.now() - 3600_000).toISOString() }],
+        });
+        expect(pulled).toEqual({ labels: 2 });
+      },
+      null,
+      null,
+      source,
+    );
+
+    expect(await getOrder(db, id)).toMatchObject({ shippingCost: 25.5 });
+    const [sync] = await db.select().from(schema.channelSync).where(eq(schema.channelSync.source, "shipstation"));
+    expect(sync).toMatchObject({ lastError: null });
+  }, 120_000);
 });

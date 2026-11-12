@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
+import { sumMoney } from "@lacey-factory/shared/money";
 import { Link, useParams } from "react-router";
 
 import { type OrderDetail, useOrder } from "../api";
 import { Loading } from "../components/loading";
 import { AddressBlock, CHANNEL_LABEL, CostLine, formatDateTime, formatPrice, ItemStateBadge, MARKET_LABEL } from "../components/orders-ui";
-import { Card, PageHeader, Table } from "../components/ui";
+import { Card, formatDate, PageHeader, Table } from "../components/ui";
 import { useTitle } from "../title";
 
 export function OrderPage() {
@@ -110,6 +111,8 @@ export function OrderPage() {
           </Table>
         </Card>
 
+        <ShipmentsCard o={o} />
+
         <Card title={`Everything ${channel} sent`}>
           <details>
             <summary className="cursor-pointer font-semibold text-brand">Show raw order data</summary>
@@ -189,7 +192,7 @@ function MoneyBreakdown({ o }: { o: OrderDetail }) {
     </div>
   );
   if (o.source === "amazon") {
-    const sum = (k: "itemPrice" | "itemTax" | "shippingPrice" | "promotionDiscount") =>
+    const sum = (k: "itemPrice" | "itemTax" | "shippingPrice" | "shippingTax" | "promotionDiscount") =>
       o.items.reduce((s, i) => s + (i[k] ?? 0), 0);
     return (
       <dl className="flex flex-col gap-2">
@@ -198,6 +201,7 @@ function MoneyBreakdown({ o }: { o: OrderDetail }) {
         {row("Discounts", money(-sum("promotionDiscount")))}
         {row("Tax", money(sum("itemTax")))}
         {row("Total", money(o.orderTotal), true)}
+        <CostSummary o={o} tax={sumMoney([sum("itemTax"), sum("shippingTax")])} />
       </dl>
     );
   }
@@ -212,8 +216,107 @@ function MoneyBreakdown({ o }: { o: OrderDetail }) {
           ))
         : row("Tax", money(o.taxTotal ?? 0))}
       {row("Total", money(o.orderTotal), true)}
-      <p className="mt-2 text-sm text-muted">Shipping cost (what we pay the carrier) will come from ShipStation.</p>
+      <CostSummary o={o} tax={o.taxTotal ?? 0} />
     </dl>
+  );
+}
+
+/**
+ * What the order cost us and what's left: total less tax, less COGS (steel, box,
+ * parts, fabric, sewing) and the ShipStation labels. Channel fees aren't included.
+ */
+function CostSummary({ o, tax }: { o: OrderDetail; tax: number }) {
+  const row = (label: ReactNode, value: ReactNode, strong = false) => (
+    <div className={`flex justify-between gap-4 ${strong ? "border-t border-line pt-2 font-bold" : ""}`}>
+      <dt>{label}</dt>
+      <dd className="text-right">{value}</dd>
+    </div>
+  );
+  const sameCurrency = !o.shippingCurrency || (o.currency ?? "USD").toUpperCase() === o.shippingCurrency.toUpperCase();
+  const revenue = o.orderTotal != null ? sumMoney([o.orderTotal, -tax]) : null;
+  const margin =
+    revenue != null && o.cogs != null && o.shippingCost != null && sameCurrency ? sumMoney([revenue, -o.cogs, -o.shippingCost]) : null;
+  return (
+    <div className="mt-4 flex flex-col gap-2 border-t border-line pt-4">
+      {row("Total less tax", formatPrice(revenue, o.currency))}
+      {row("COGS", o.cogs == null ? <span className="text-muted">Not recorded yet</span> : `−${formatPrice(o.cogs, o.currency)}`)}
+      {row(
+        "Shipping labels",
+        o.shippingCost == null ? (
+          <span className="text-muted">Not shipped yet</span>
+        ) : (
+          `−${formatPrice(o.shippingCost, o.shippingCurrency)}`
+        ),
+      )}
+      {row(
+        "Margin",
+        margin != null ? (
+          <span className={margin < 0 ? "text-danger" : ""}>{formatPrice(margin, o.currency)}</span>
+        ) : (
+          <span className="font-normal text-muted">
+            {!sameCurrency
+              ? "Needs the same currency"
+              : `Needs ${[o.cogs == null && "COGS", o.shippingCost == null && "a shipping label"].filter(Boolean).join(" and ")}`}
+          </span>
+        ),
+        true,
+      )}
+      <p className="text-sm text-muted">Before {o.source === "amazon" ? "Amazon" : "Shopify"} fees.</p>
+    </div>
+  );
+}
+
+/** Every ShipStation label for the order: when, how, tracking and cost. */
+function ShipmentsCard({ o }: { o: OrderDetail }) {
+  return (
+    <Card title="Shipments">
+      {o.shipments.length === 0 ? (
+        <p className="text-muted">No ShipStation label yet. It shows up here when the label is bought.</p>
+      ) : (
+        <Table>
+          <thead>
+            <tr>
+              <th>Ship date</th>
+              <th>Carrier</th>
+              <th>Tracking</th>
+              <th className="text-right">Label cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {o.shipments.map((s) => (
+              <tr key={s.id} className={s.counts ? "" : "text-muted"}>
+                <td className="whitespace-nowrap">
+                  {formatDate(s.shipDate)}
+                  {s.shippedAt && <div className="text-sm text-muted">marked shipped {formatDateTime(s.shippedAt)}</div>}
+                </td>
+                <td>
+                  {s.carrierCode?.toUpperCase() ?? "—"}
+                  {s.serviceCode && <div className="text-sm text-muted">{s.serviceCode}</div>}
+                </td>
+                <td>
+                  {s.trackingUrl ? (
+                    <a href={s.trackingUrl} target="_blank" rel="noreferrer" className="font-semibold text-brand">
+                      {s.trackingNumber ?? "Track"}
+                    </a>
+                  ) : (
+                    (s.trackingNumber ?? "—")
+                  )}
+                </td>
+                <td className="text-right whitespace-nowrap">
+                  {s.status === "voided" ? (
+                    <span className="font-semibold">Voided</span>
+                  ) : !s.counts ? (
+                    <span>{s.status}</span>
+                  ) : (
+                    formatPrice(s.cost, s.currency)
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Card>
   );
 }
 

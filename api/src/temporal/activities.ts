@@ -19,6 +19,10 @@ import {
 } from "../domain/invoices";
 import { markSyncFailed } from "../domain/orders";
 import { checkStockLevels } from "../domain/stock-alerts";
+import { ShipStationError } from "../shipstation/api";
+import type { ShipStationSource } from "../shipstation/source";
+import { ingestEvent as shipstationIngest, pullBegin as ssPullBegin, pullEnd as ssPullEnd, pullPage as ssPullPage } from "../shipstation/sync";
+import type { SsWebhookBody } from "../shipstation/types";
 import { ShopifyError } from "../shopify/admin-api";
 import { type Notify, slackNotifier } from "../slack";
 import type { ShopifySource } from "../shopify/order-source";
@@ -44,6 +48,8 @@ export interface ActivityDeps {
   orders?: OrderSource | null;
   /** Shopify orders; null when SHOPIFY_MODE=off. */
   shopify?: ShopifySource | null;
+  /** ShipStation labels; null when SHIPSTATION_MODE=off. */
+  shipstation?: ShipStationSource | null;
   /** Slack low-stock alerts; defaults to the SLACK_WEBHOOK_URL webhook. */
   notify?: Notify;
 }
@@ -60,7 +66,33 @@ async function shopifyCall<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createActivities({ db, mail, reader, store, orders = null, shopify = null, notify = slackNotifier() }: ActivityDeps) {
+/** Same for ShipStation: a bad key or a refused URL fails at once; 429/5xx are retried. */
+async function shipstationCall<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof ShipStationError && !err.retryable) throw ApplicationFailure.nonRetryable(err.message, "ShipStationError");
+    throw err;
+  }
+}
+
+/** Log the first delivery of each event type in full, so its real shape can be checked. */
+const loggedEvents = new Set<string>();
+
+export function createActivities({
+  db,
+  mail,
+  reader,
+  store,
+  orders = null,
+  shopify = null,
+  shipstation = null,
+  notify = slackNotifier(),
+}: ActivityDeps) {
+  const needShipStation = () => {
+    if (!shipstation) throw ApplicationFailure.nonRetryable("ShipStation is off (SHIPSTATION_MODE=off).", "ShipStationOff");
+    return shipstation;
+  };
   const needShopify = () => {
     if (!shopify) throw ApplicationFailure.nonRetryable("Shopify is off (SHOPIFY_MODE=off).", "ShopifyOff");
     return shopify;
@@ -206,6 +238,37 @@ export function createActivities({ db, mail, reader, store, orders = null, shopi
 
     async shopifyFailed(message: string): Promise<void> {
       await markSyncFailed(db, "shopify", message.slice(0, 1000));
+    },
+
+    // ── ShipStation shipments ──
+
+    async shipstationIngestEvent(body: SsWebhookBody) {
+      const source = needShipStation();
+      const kind = String(body.event ?? body.resource_type ?? "unknown");
+      if (!loggedEvents.has(kind)) {
+        loggedEvents.add(kind);
+        console.log(`[shipstation] first ${kind} delivery:`, JSON.stringify(body).slice(0, 4000));
+      }
+      return shipstationCall(() => shipstationIngest(db, source, body));
+    },
+
+    async shipstationPullBegin(since: string | null): Promise<string> {
+      return ssPullBegin(db, since);
+    },
+
+    async shipstationPullPage(since: string, page: number) {
+      const source = needShipStation();
+      heartbeat();
+      return shipstationCall(() => ssPullPage(db, source, since, page));
+    },
+
+    async shipstationPullEnd(maxCreated: string | null, count: number): Promise<void> {
+      const source = needShipStation();
+      await shipstationCall(() => ssPullEnd(db, source, maxCreated, count));
+    },
+
+    async shipstationFailed(message: string): Promise<void> {
+      await markSyncFailed(db, "shipstation", message.slice(0, 1000));
     },
   };
 }

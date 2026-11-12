@@ -6,7 +6,14 @@ import { authenticate } from "./auth";
 import { emailConfig } from "./config";
 import { getDb } from "./db";
 import { documentUrl } from "./storage";
-import { notifyMailbox, notifyShopifyOrder, startAmazonSync, startShopifyPull } from "./temporal/client";
+import {
+  notifyMailbox,
+  notifyShipStation,
+  notifyShopifyOrder,
+  startAmazonSync,
+  startShipStationPull,
+  startShopifyPull,
+} from "./temporal/client";
 
 const verifier = new OAuth2Client();
 
@@ -17,6 +24,8 @@ export const appDeps: AppDeps = {
   startAmazonSync,
   notifyShopifyOrder,
   startShopifyPull,
+  notifyShipStation,
+  startShipStationPull,
   documentUrl,
   async verifyPushToken(token) {
     const audience = emailConfig().pubsubPushAudience;
